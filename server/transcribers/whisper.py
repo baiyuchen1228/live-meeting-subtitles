@@ -3,10 +3,32 @@ Whisper transcriber using faster-whisper.
 Optimized for real-time streaming with CUDA.
 """
 
+import ctypes
+import glob
+import os
 import time
 import numpy as np
 
 from .base import BaseTranscriber, TranscriptionResult
+
+
+def _preload_cuda12_libs():
+    """ctranslate2 is built against CUDA 12, but torch may bring CUDA 13.
+    Preload cuBLAS 12 from the nvidia-cublas-cu12 wheel if it is installed."""
+    try:
+        import nvidia.cublas
+    except ImportError:
+        return
+    for base in nvidia.cublas.__path__:
+        for name in ("libcublasLt.so.12", "libcublas.so.12"):
+            for path in glob.glob(os.path.join(base, "lib", name)):
+                try:
+                    ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    pass
+
+
+_preload_cuda12_libs()
 
 try:
     from faster_whisper import WhisperModel
@@ -46,6 +68,11 @@ class WhisperTranscriber(BaseTranscriber):
             compute_type=self.compute_type,
         )
         print(f"Whisper model loaded in {time.time() - start:.1f}s")
+
+        # Run the encoder/decoder once so the first real request isn't slow.
+        # VAD must be off, otherwise the dummy audio is filtered out before the model runs.
+        dummy = (np.random.randn(16000) * 0.1).astype(np.float32)
+        list(self._model.transcribe(dummy, language=self.language, vad_filter=False)[0])
 
     def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> TranscriptionResult | None:
         """

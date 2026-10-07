@@ -6,6 +6,7 @@ websockets>=12.0
 
 # Transcription - Whisper
 faster-whisper>=1.0.0
+nvidia-cublas-cu12      # ctranslate2 needs CUDA 12 cuBLAS (torch nightly ships CUDA 13)
 
 # Transcription - Parakeet (NVIDIA NeMo)
 # Note: Requires PyTorch nightly for RTX 50 series (Blackwell)

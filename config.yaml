@@ -15,7 +15,7 @@ transcription:
 # Translation settings
 translation:
   provider: "google"  # deepl, google, local, none
-  target_language: "RU"
+  target_language: "ZH-TW"
 
   deepl:
     api_key: ""  # Set via DEEPL_API_KEY env var

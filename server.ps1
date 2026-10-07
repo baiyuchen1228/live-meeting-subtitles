@@ -103,5 +103,5 @@ Write-Host "========================================"
 Write-Host ""
 
 # Run server in WSL
-$cmd = "cd '$WslPath' && source venv/bin/activate 2>/dev/null; python -m server.main --host 0.0.0.0 --port $Port --transcriber $Transcriber --translator $Translator --target-lang RU --source-lang en"
+$cmd = "cd '$WslPath' && source venv/bin/activate 2>/dev/null; python -m server.main --host 0.0.0.0 --port $Port --transcriber $Transcriber --translator $Translator --target-lang ZH-TW --source-lang en"
 wsl bash -c $cmd

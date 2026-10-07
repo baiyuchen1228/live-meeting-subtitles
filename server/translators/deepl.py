@@ -33,10 +33,13 @@ class DeepLTranslator(Translator):
         if not text.strip():
             return ""
 
+        # DeepL uses ZH-HANT / ZH-HANS for Chinese variants
+        target = {"ZH-TW": "ZH-HANT", "ZH": "ZH-HANS"}.get(target_lang.upper(), target_lang.upper())
+
         try:
             result = self._client.translate_text(
                 text,
-                target_lang=target_lang.upper(),
+                target_lang=target,
                 source_lang=source_lang.upper() if source_lang else None,
             )
             return result.text

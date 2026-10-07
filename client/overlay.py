@@ -24,13 +24,15 @@ class TextEntry:
     original: str
     translated: str
     timestamp: float
+    id: int = -1
 
 
 class OverlayWindow(QWidget):
     """Semi-transparent overlay for subtitles."""
 
     # Signal for thread-safe updates
-    text_received = pyqtSignal(str, str)  # original, translated
+    text_received = pyqtSignal(str, str, int)  # original, translated, id
+    translation_received = pyqtSignal(int, str)  # id, translated
     status_received = pyqtSignal(str)
 
     def __init__(
@@ -62,6 +64,7 @@ class OverlayWindow(QWidget):
 
         # Connect signals
         self.text_received.connect(self._on_text)
+        self.translation_received.connect(self._on_translation)
         self.status_received.connect(self._on_status)
 
     def _setup_ui(self, opacity: float):
@@ -137,20 +140,31 @@ class OverlayWindow(QWidget):
 
         self.move(x, y)
 
-    def add_text(self, original: str, translated: str):
+    def add_text(self, original: str, translated: str, entry_id: int = -1):
         """Thread-safe method to add text."""
-        self.text_received.emit(original, translated)
+        self.text_received.emit(original, translated, entry_id)
+
+    def set_translation(self, entry_id: int, translated: str):
+        """Thread-safe method to fill in the translation of an existing entry."""
+        self.translation_received.emit(entry_id, translated)
 
     def set_status(self, status: str):
         """Thread-safe method to update status."""
         self.status_received.emit(status)
 
-    def _on_text(self, original: str, translated: str):
+    def _on_text(self, original: str, translated: str, entry_id: int):
         self.placeholder.hide()
 
-        entry = TextEntry(original, translated, time.time())
+        entry = TextEntry(original, translated, time.time(), entry_id)
         self._entries.append(entry)
         self._rebuild_display()
+
+    def _on_translation(self, entry_id: int, translated: str):
+        for entry in self._entries:
+            if entry.id == entry_id:
+                entry.translated = translated
+                self._rebuild_display()
+                return
 
     def _on_status(self, status: str):
         self.status_label.setText(status)
@@ -187,7 +201,7 @@ class OverlayWindow(QWidget):
         # Translation
         if entry.translated:
             trans_label = QLabel(entry.translated)
-            trans_label.setFont(font)
+            trans_label.setFont(QFont("Microsoft JhengHei UI", self.font_size))
             trans_label.setStyleSheet("color: #7cb7ff;")
             trans_label.setWordWrap(True)
             layout.addWidget(trans_label)

@@ -19,6 +19,7 @@ LANG_MAP = {
     "PT": "pt",
     "JA": "ja",
     "ZH": "zh-CN",
+    "ZH-TW": "zh-TW",
     "KO": "ko",
     "UK": "uk",
     "PL": "pl",

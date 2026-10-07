@@ -14,6 +14,11 @@ try:
 except ImportError:
     websockets = None
 
+try:
+    from faster_whisper.vad import get_speech_timestamps, VadOptions
+except ImportError:
+    get_speech_timestamps = None
+
 import sys
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 
@@ -41,7 +46,7 @@ class TranscriptionServer:
         model: str = "large-v3",
         device: str = "cuda",
         translation_provider: str = "google",
-        target_language: str = "RU",
+        target_language: str = "ZH-TW",
         source_language: str = "en",
     ):
         if websockets is None:
@@ -83,8 +88,13 @@ class TranscriptionServer:
         self._audio_buffer: list[np.ndarray] = []
         self._buffer_duration = 0.0
         self._sample_rate = 16000
-        self._min_duration = 2.0  # Minimum seconds before processing
-        self._max_duration = 10.0  # Maximum seconds before forced processing
+        self._end_silence = 0.5  # Silence after speech that ends an utterance
+        self._max_duration = 5.0  # Maximum seconds before forced processing
+        self._vad_options = (
+            VadOptions(min_silence_duration_ms=100, min_speech_duration_ms=250, speech_pad_ms=0)
+            if get_speech_timestamps else None
+        )
+        self._next_id = 0
 
         self._clients: set = set()
 
@@ -93,10 +103,22 @@ class TranscriptionServer:
         # Load model before accepting connections
         print("Loading transcription model...")
         self.transcriber.load()
+        self._warmup()
 
         print(f"Starting server on ws://{self.host}:{self.port}")
         async with websockets.serve(self._handle_client, self.host, self.port):
             await asyncio.Future()  # Run forever
+
+    def _warmup(self):
+        """Run each model once so the first real sentence isn't slowed by lazy loading."""
+        print("Warming up models...")
+        try:
+            noise = (np.random.randn(self._sample_rate) * 0.1).astype(np.float32)
+            self.transcriber.transcribe(noise, self._sample_rate)
+            if self.translator:
+                self.translator.translate("Hello.", self.target_language, self.source_language)
+        except Exception as e:
+            print(f"Warmup failed (continuing): {e}")
 
     async def _handle_client(self, websocket):
         """Handle a client connection."""
@@ -136,30 +158,65 @@ class TranscriptionServer:
         self._audio_buffer.append(audio)
         self._buffer_duration += len(audio) / self._sample_rate
 
-        # Check if we should process
-        should_process = self._buffer_duration >= self._min_duration and (
-            self._buffer_duration >= self._max_duration or
-            self._is_silence(audio)
-        )
+        cut = self._find_cut_point()
+        if cut is not None:
+            await self._process_buffer(websocket, cut)
 
-        if should_process:
-            await self._process_buffer(websocket)
+    def _find_cut_point(self) -> int | None:
+        """Decide how many buffered samples to process now (None = keep waiting)."""
+        sr = self._sample_rate
+        buffer = np.concatenate(self._audio_buffer)
 
-    def _is_silence(self, audio: np.ndarray, threshold: float = 0.01) -> bool:
-        """Check if audio chunk ends with silence."""
-        check_samples = min(len(audio), 4000)  # Last 0.25s
-        rms = np.sqrt(np.mean(audio[-check_samples:] ** 2))
-        return rms < threshold
+        if self._vad_options is None:
+            # Fallback without VAD: fixed volume threshold on the last 0.25s
+            tail = buffer[-sr // 4:]
+            if self._buffer_duration >= 2.0 and np.sqrt(np.mean(tail ** 2)) < 0.01:
+                return len(buffer)
+            return len(buffer) if self._buffer_duration >= self._max_duration else None
 
-    async def _process_buffer(self, websocket):
-        """Process accumulated audio buffer."""
+        speeches = get_speech_timestamps(buffer, self._vad_options)
+
+        if not speeches:
+            # Only silence so far: drop it, but keep the last 0.5s in case speech starts there
+            keep = buffer[-sr // 2:]
+            self._audio_buffer = [keep]
+            self._buffer_duration = len(keep) / sr
+            return None
+
+        # Speech followed by a pause: the utterance is complete
+        if (len(buffer) - speeches[-1]["end"]) / sr >= self._end_silence:
+            return len(buffer)
+
+        # Too long without a pause: cut at the last gap between words, if there is one
+        if self._buffer_duration >= self._max_duration:
+            if len(speeches) > 1:
+                return (speeches[-2]["end"] + speeches[-1]["start"]) // 2
+            return self._quietest_point(buffer)
+
+        return None
+
+    def _quietest_point(self, buffer: np.ndarray, window: float = 1.5) -> int:
+        """Find the quietest 100ms stretch in the last `window` seconds (likely a gap between words).
+        A 100ms average ignores the short dips inside a word, which noise can make look quiet."""
+        frame = self._sample_rate // 100  # 10ms
+        start = max(0, len(buffer) - int(window * self._sample_rate))
+        n = (len(buffer) - start) // frame
+        if n < 10:
+            return len(buffer)
+        energy = np.mean(buffer[start:start + n * frame].reshape(n, frame) ** 2, axis=1)
+        smoothed = np.convolve(energy, np.ones(10) / 10, mode="valid")
+        quietest = int(np.argmin(smoothed))
+        return start + (quietest + 5) * frame
+
+    async def _process_buffer(self, websocket, cut: int):
+        """Process the first `cut` samples of the buffer and keep the rest."""
         if not self._audio_buffer:
             return
 
-        # Get buffered audio
-        full_audio = np.concatenate(self._audio_buffer)
-        self._audio_buffer = []
-        self._buffer_duration = 0.0
+        buffer = np.concatenate(self._audio_buffer)
+        full_audio, rest = buffer[:cut], buffer[cut:]
+        self._audio_buffer = [rest] if len(rest) else []
+        self._buffer_duration = len(rest) / self._sample_rate
 
         # Transcribe (run in thread to not block)
         loop = asyncio.get_event_loop()
@@ -170,38 +227,44 @@ class TranscriptionServer:
             self._sample_rate,
         )
 
-        if result is None:
+        if result is None or not result.text:
             return
 
-        # Translate
-        translated = ""
-        if self.translator and result.text:
-            try:
-                translated = await loop.run_in_executor(
-                    None,
-                    self.translator.translate,
-                    result.text,
-                    self.target_language,
-                    result.language,
-                )
-            except Exception as e:
-                print(f"Translation error: {e}")
-
-        # Send result
-        response = {
+        # Send the original right away; the translation follows as a separate message
+        result_id = self._next_id
+        self._next_id += 1
+        await websocket.send(encode_message({
             "type": MessageType.RESULT,
+            "id": result_id,
             "original": result.text,
-            "translated": translated,
+            "translated": "",
             "language": result.language,
             "confidence": result.confidence,
             "timestamp": time.time(),
-        }
-
-        await websocket.send(encode_message(response))
-
-        # Also print to server console
+        }))
         print(f"\n[{result.language}] {result.text}")
+
+        if not self.translator:
+            return
+
+        try:
+            translated = await loop.run_in_executor(
+                None,
+                self.translator.translate,
+                result.text,
+                self.target_language,
+                result.language,
+            )
+        except Exception as e:
+            print(f"Translation error: {e}")
+            return
+
         if translated:
+            await websocket.send(encode_message({
+                "type": MessageType.TRANSLATION,
+                "id": result_id,
+                "translated": translated,
+            }))
             print(f"[{self.target_language}] {translated}")
 
     async def _handle_command(self, websocket, message: str):
@@ -252,7 +315,7 @@ def main():
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--translator", default="google",
                         choices=["deepl", "google", "local", "none"])
-    parser.add_argument("--target-lang", default="RU", help="Target language for translation")
+    parser.add_argument("--target-lang", default="ZH-TW", help="Target language for translation")
     parser.add_argument("--source-lang", default="en", help="Source language (or 'auto')")
 
     args = parser.parse_args()

@@ -128,12 +128,18 @@ class VoiceClient:
                     translated = data.get("translated", "")
 
                     if original and self._overlay:
-                        self._overlay.add_text(original, translated)
+                        self._overlay.add_text(original, translated, data.get("id", -1))
 
                     # Also print to console
                     print(f"\n[EN] {original}")
                     if translated:
-                        print(f"[RU] {translated}")
+                        print(f"[ZH-TW] {translated}")
+
+                elif msg_type == MessageType.TRANSLATION:
+                    translated = data.get("translated", "")
+                    if translated and self._overlay:
+                        self._overlay.set_translation(data.get("id", -1), translated)
+                    print(f"[ZH-TW] {translated}")
 
                 elif msg_type == MessageType.STATUS:
                     status = data.get("message", "")

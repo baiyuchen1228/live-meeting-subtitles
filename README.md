@@ -10,7 +10,7 @@ https://github.com/user-attachments/assets/f74c706b-0963-4978-afc6-3137943b2e62
 
 Real-time voice transcription and translation for video calls (Zoom, Google Meet, Teams, etc.)
 
-Captures system audio, transcribes speech using Whisper, and displays translated subtitles in an overlay window.
+Captures system audio, transcribes speech using Parakeet or Whisper, and displays subtitles in an overlay window: the English original with a Traditional Chinese translation underneath (the target language is configurable).
 
 ## Architecture
 
@@ -18,9 +18,9 @@ Captures system audio, transcribes speech using Whisper, and displays translated
 ┌──────────────────────┐     WebSocket      ┌────────────────────────────┐
 │   Windows Client     │  ───────────────►  │      WSL Server            │
 │                      │                    │                            │
-│  • WASAPI capture    │    audio bytes     │  • Whisper large-v3 (CUDA) │
-│  • PyQt6 overlay     │  ◄───────────────  │  • Google/DeepL translate  │
-│                      │    JSON results    │                            │
+│  • WASAPI capture    │    audio bytes     │  • Parakeet / Whisper      │
+│  • PyQt6 overlay     │  ◄───────────────  │  • NLLB / Google / DeepL   │
+│                      │    JSON results    │    translation (CUDA)      │
 └──────────────────────┘                    └────────────────────────────┘
 ```
 
@@ -58,8 +58,14 @@ cd live-meeting-subtitles
 python3 -m venv venv
 source venv/bin/activate
 
+# RTX 50 series (Blackwell) needs PyTorch nightly for Parakeet
+pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128
+
 # Install dependencies
 pip install -r server/requirements.txt
+
+# For the local NLLB translator (recommended)
+pip install transformers sentencepiece
 
 # Verify CUDA is available
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
@@ -76,6 +82,10 @@ cd \\wsl.localhost\Ubuntu\home\YOUR_USERNAME\projects\live-meeting-subtitles
 # Create virtual environment
 python -m venv venv_win
 
+# Allow the unsigned activate script in this window
+# (scripts on \\wsl.localhost are treated as remote files)
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
 # Activate
 .\venv_win\Scripts\Activate.ps1
 
@@ -85,57 +95,64 @@ pip install -r client/requirements.txt
 
 ## Usage
 
-### Start the server (WSL terminal)
+Start the server first, then the client.
+
+### 1. Start the server (WSL terminal)
 
 ```bash
 cd ~/projects/live-meeting-subtitles
 source venv/bin/activate
-python -m server.main --translator google
+./server.sh -t parakeet --translator local
 ```
 
-Options:
-- `--translator`: `google` (free), `deepl` (API key required), `local` (NLLB), `none`
-- `--model`: Whisper model (`tiny`, `base`, `small`, `medium`, `large-v3`)
-- `--device`: `cuda` or `cpu`
-- `--target-lang`: Target language code (default: `RU`)
+Use `./server.sh -i` to pick the transcriber and translator from a menu, and `./server.sh --stop` to stop it.
+Models are downloaded on first run; the server is ready when it prints `Starting server on ws://0.0.0.0:9876`.
 
-### Start the client (PowerShell)
+| Option | Values |
+|---|---|
+| `-t`, `--transcriber` | `parakeet` (faster, recommended), `whisper` |
+| `--translator` | `local` (NLLB on GPU, recommended), `google` (free, may be rate-limited), `deepl` (needs `DEEPL_API_KEY`), `none` |
+| `--port` | Server port (default `9876`) |
+| `TARGET_LANG` env var | Target language (default `ZH-TW`), e.g. `TARGET_LANG=JA ./server.sh` |
+
+Supported target languages: `ZH-TW` (Traditional Chinese), `ZH` (Simplified Chinese), `EN`, `JA`, `KO`, `RU`, `DE`, `FR`, `ES`, `IT`, `PT`, `UK`, `PL`.
+
+Running `python -m server.main` directly also works; see `python -m server.main --help` for all options (`--model`, `--device`, `--target-lang`, `--source-lang`).
+
+### 2. Start the client (PowerShell)
 
 ```powershell
 cd \\wsl.localhost\Ubuntu\home\YOUR_USERNAME\projects\live-meeting-subtitles
-.\venv_win\Scripts\Activate.ps1
-python -m client.main
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\client.ps1
 ```
 
-Options:
-- `--no-overlay`: Console mode without GUI
-- `--device "NAME"`: Specific audio device
-- `--list-devices`: Show available audio devices
+Pick the audio device you hear the meeting on (speakers or headset). The client captures what that device plays (WASAPI loopback), so the other side of the call is transcribed, not your microphone.
 
-### List audio devices
+| Command | What it does |
+|---|---|
+| `.\client.ps1 -ListDevices` | List loopback audio devices |
+| `.\client.ps1 -Device "Headset"` | Use a device directly (partial name match) |
+| `.\client.ps1 -NoOverlay` | Print subtitles in the console only |
+| `.\client.ps1 -HostName 172.x.x.x` | Connect to a non-localhost server (WSL IP from `hostname -I`) |
 
-```powershell
-python -m client.main --list-devices
-```
+### 3. Join the call
+
+The overlay shows each sentence as it is recognized:
+- **White**: English original, shown as soon as it is transcribed
+- **Blue**: translation, filled in a moment later
+
+Drag the window with the left mouse button to move it; click `×` to close it.
+
+Tip: test with an English YouTube video before a real meeting.
+
+### How the latency works
+
+The server uses Silero VAD to detect when the speaker pauses. A sentence is sent for transcription 0.5 s after speech ends, or after 5 s of continuous speech (cut at a gap between words). The original text is sent immediately and the translation follows in a separate message, so the English line appears first.
 
 ## Configuration
 
-Edit `config.yaml` to change default settings:
-
-```yaml
-server:
-  host: localhost
-  port: 9876
-  model: large-v3
-  device: cuda
-  translator: google
-  target_language: RU
-
-client:
-  overlay: true
-  font_size: 18
-  opacity: 0.85
-```
+Defaults are set by command-line options (see above). `config.yaml` documents the intended settings but is not loaded by the code yet.
 
 ## Troubleshooting
 
@@ -151,9 +168,27 @@ Make sure you have audio playing through the selected device. WASAPI loopback re
 1. Check server is running on port 9876
 2. Windows Firewall may block WSL connections — add exception
 
+### `Activate.ps1 ... is not digitally signed`
+PowerShell blocks unsigned scripts from `\\wsl.localhost`. Run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` in that window first, or call `.\venv_win\Scripts\python.exe` directly.
+
+### `DLL load failed while importing QtWidgets`
+Anaconda-based Python ships an older `msvcp140.dll` than PyQt6 6.8+ needs. `client/requirements.txt` pins `PyQt6<6.8`; reinstall with `pip install -r client/requirements.txt`.
+
+### "No audio devices found"
+The client needs `PyAudioWPatch` (not plain `pyaudio`): `pip install -r client/requirements.txt`.
+
+### `Library libcublas.so.12 is not found` (Whisper)
+PyTorch nightly ships CUDA 13, but faster-whisper's ctranslate2 needs CUDA 12 cuBLAS: `pip install nvidia-cublas-cu12` (included in `server/requirements.txt`). Parakeet does not need it.
+
+### `Google Translate error: ... too many requests`
+Google blocks some IPs (common on campus or shared networks) regardless of request rate. Use `--translator local` or `--translator deepl`.
+
+### `You are sending unauthenticated requests to the HF Hub`
+Harmless. Once models are downloaded, `export HF_HUB_OFFLINE=1` skips the online check and starts faster.
+
 ### High latency
-- Use smaller model: `--model small` or `--model medium`
-- Reduce chunk duration in config
+- Use `-t parakeet` (faster than Whisper)
+- Check the server log: the first sentence after startup should not be slow (models are warmed up at startup)
 - Ensure GPU is not throttling (check temps)
 
 ## Project Structure
@@ -161,8 +196,8 @@ Make sure you have audio playing through the selected device. WASAPI loopback re
 ```
 live-meeting-subtitles/
 ├── server/                 # WSL (Python + CUDA)
-│   ├── main.py            # WebSocket server
-│   ├── transcriber.py     # Whisper wrapper
+│   ├── main.py            # WebSocket server (VAD-based segmentation)
+│   ├── transcribers/      # Parakeet / Whisper backends
 │   └── translators/       # Translation backends
 │       ├── google.py      # Google Translate (free)
 │       ├── deepl.py       # DeepL API
@@ -176,7 +211,9 @@ live-meeting-subtitles/
 ├── shared/                 # Common code
 │   └── protocol.py        # WebSocket protocol
 │
-└── config.yaml            # Configuration
+├── server.sh / server.ps1  # Server launchers
+├── client.ps1 / client.sh  # Client launchers
+└── config.yaml            # Intended defaults (not loaded yet)
 ```
 
 ## License
