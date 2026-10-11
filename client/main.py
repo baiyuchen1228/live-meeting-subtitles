@@ -127,13 +127,22 @@ class VoiceClient:
                     original = data.get("original", "")
                     translated = data.get("translated", "")
 
-                    if original and self._overlay:
+                    if self._overlay:
+                        # Empty original = the server discarded a preview
                         self._overlay.add_text(original, translated, data.get("id", -1))
 
                     # Also print to console
-                    print(f"\n[EN] {original}")
+                    if original:
+                        print(f"\n[EN] {original}")
                     if translated:
                         print(f"[ZH-TW] {translated}")
+
+                elif msg_type == MessageType.PARTIAL:
+                    # Live previews only go to the overlay, not the console
+                    if self._overlay:
+                        self._overlay.set_partial(
+                            data.get("id", -1), data.get("original", ""), data.get("translated", "")
+                        )
 
                 elif msg_type == MessageType.TRANSLATION:
                     translated = data.get("translated", "")

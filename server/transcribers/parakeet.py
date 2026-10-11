@@ -2,18 +2,16 @@
 Parakeet TDT v3 transcriber using NVIDIA NeMo.
 Optimized for high-speed transcription on NVIDIA GPUs.
 
-Note: Requires PyTorch nightly with CUDA 12.8 for RTX 5090 support.
+Note: RTX 50 series (Blackwell) requires PyTorch nightly with CUDA 12.8+.
 """
 
 import time
-import tempfile
-import os
 import numpy as np
-import scipy.io.wavfile as wav
 
 from .base import BaseTranscriber, TranscriptionResult
 
 try:
+    import torch
     import nemo.collections.asr as nemo_asr
     from omegaconf import open_dict
     NEMO_AVAILABLE = True
@@ -46,7 +44,6 @@ class ParakeetTranscriber(BaseTranscriber):
         self.device = device
         self.language = language
         self._model = None
-        self._temp_dir = tempfile.mkdtemp(prefix="parakeet_")
 
     def load(self) -> None:
         """Load the model (call once at startup)."""
@@ -60,6 +57,15 @@ class ParakeetTranscriber(BaseTranscriber):
 
         # Disable CUDA graphs (workaround for PyTorch nightly compatibility)
         self._disable_cuda_graphs()
+
+        # We call the model directly (see _transcribe_direct), so set up what
+        # NeMo's transcribe() would: eval mode, no dither noise, no padding
+        self._model.eval()
+        self._model.preprocessor.featurizer.dither = 0.0
+        self._model.preprocessor.featurizer.pad_to = 0
+
+        # Loading peaks at ~2x the model size; release that cache for the translator
+        torch.cuda.empty_cache()
 
         print(f"Parakeet model loaded in {time.time() - start:.1f}s")
 
@@ -98,44 +104,43 @@ class ParakeetTranscriber(BaseTranscriber):
 
         start = time.time()
 
-        # NeMo requires file path, so write temp file
-        temp_path = os.path.join(self._temp_dir, "temp_audio.wav")
-        audio_int16 = (audio * 32767).astype(np.int16)
-        wav.write(temp_path, sample_rate, audio_int16)
-
         try:
-            # Transcribe
-            results = self._model.transcribe([temp_path])
-
-            if not results or not results[0].text:
-                return None
-
-            result = results[0]
-            text = result.text.strip()
-
-            if not text:
-                return None
-
-            # Parakeet auto-detects language
-            detected_lang = getattr(result, 'lang', 'unknown')
-            if detected_lang == 'unknown' and self.language:
-                detected_lang = self.language
-
-            return TranscriptionResult(
-                text=text,
-                language=detected_lang,
-                confidence=1.0,  # Parakeet doesn't provide confidence
-                processing_time=time.time() - start,
-            )
-
+            text = self._transcribe_direct(audio)
         except Exception as e:
-            print(f"Parakeet transcription error: {e}")
+            # Fall back to NeMo's high-level API (slower: builds a dataloader per call)
+            print(f"Parakeet direct inference failed, using transcribe(): {e}")
+            try:
+                results = self._model.transcribe([audio], verbose=False)
+                text = results[0].text if results else ""
+            except Exception as e:
+                print(f"Parakeet transcription error: {e}")
+                return None
+
+        text = text.strip()
+        if not text:
             return None
 
-        finally:
-            # Cleanup temp file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+        return TranscriptionResult(
+            text=text,
+            language=self.language or "unknown",
+            confidence=1.0,  # Parakeet doesn't provide confidence
+            processing_time=time.time() - start,
+        )
+
+    def _transcribe_direct(self, audio: np.ndarray) -> str:
+        """Run preprocessor -> encoder -> decoder on an in-memory array.
+        2-3x faster than transcribe(), which writes temp files and builds a dataloader per call."""
+        model = self._model
+        with torch.inference_mode():
+            signal = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32)).unsqueeze(0).to(model.device)
+            length = torch.tensor([len(audio)], device=model.device)
+            encoded, encoded_len = model.forward(input_signal=signal, input_signal_length=length)
+            hyps = model.decoding.rnnt_decoder_predictions_tensor(
+                encoder_output=encoded, encoded_lengths=encoded_len
+            )
+        if isinstance(hyps, tuple):  # older NeMo returns (best, all)
+            hyps = hyps[0]
+        return hyps[0].text if hyps else ""
 
     def unload(self) -> None:
         """Unload model to free GPU memory."""
@@ -147,14 +152,6 @@ class ParakeetTranscriber(BaseTranscriber):
                 torch.cuda.empty_cache()
             except ImportError:
                 pass
-
-        # Cleanup temp directory
-        try:
-            import shutil
-            if os.path.exists(self._temp_dir):
-                shutil.rmtree(self._temp_dir)
-        except Exception:
-            pass
 
     def is_loaded(self) -> bool:
         return self._model is not None

@@ -139,8 +139,9 @@ Pick the audio device you hear the meeting on (speakers or headset). The client 
 ### 3. Join the call
 
 The overlay shows each sentence as it is recognized:
-- **White**: English original, shown as soon as it is transcribed
-- **Blue**: translation, filled in a moment later
+- **Gray**: live preview while the person is still speaking (updates about every 0.8 s)
+- **White**: final English original, replaces the preview when the sentence ends
+- **Blue**: translation (dimmed while it is still the preview's translation)
 
 Drag the window with the left mouse button to move it; click `×` to close it.
 
@@ -148,7 +149,9 @@ Tip: test with an English YouTube video before a real meeting.
 
 ### How the latency works
 
-The server uses Silero VAD to detect when the speaker pauses. A sentence is sent for transcription 0.5 s after speech ends, or after 5 s of continuous speech (cut at a gap between words). The original text is sent immediately and the translation follows in a separate message, so the English line appears first.
+The client sends audio in 0.2 s chunks. The server uses Silero VAD to detect when the speaker pauses: a sentence is finalized 0.5 s after speech ends, or after 8 s of continuous speech (cut at a gap between words). While someone is speaking, the server sends a live preview of the unfinished sentence about every 0.8 s, so text appears about 1 s after speech starts. Final text is sent immediately and its translation follows in a separate message.
+
+Parakeet runs the model directly on in-memory audio (no temp files or per-call dataloader), which takes about 60-110 ms per sentence on an RTX 4060.
 
 ## Configuration
 

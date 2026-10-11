@@ -24,6 +24,7 @@ class MessageType(str, Enum):
     TRANSCRIPTION = "transcription"  # Transcribed text
     TRANSLATION = "translation"      # Translated text
     RESULT = "result"                # Combined result
+    PARTIAL = "partial"              # Live preview of an unfinished utterance
     ERROR = "error"
     PONG = "pong"
     STATUS = "status"                # Server status update

@@ -50,7 +50,7 @@ class AudioCapture:
         on_audio: Callable[[bytes], None],
         device_name: str | None = None,
         target_sample_rate: int = 16000,
-        chunk_duration: float = 0.5,
+        chunk_duration: float = 0.2,  # smaller chunks let the server detect end of speech sooner
     ):
         """
         Args:

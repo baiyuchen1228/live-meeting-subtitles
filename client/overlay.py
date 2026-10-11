@@ -25,6 +25,8 @@ class TextEntry:
     translated: str
     timestamp: float
     id: int = -1
+    partial: bool = False  # live preview, still being spoken
+    translation_pending: bool = False  # showing a preview's translation until the final one arrives
 
 
 class OverlayWindow(QWidget):
@@ -33,6 +35,7 @@ class OverlayWindow(QWidget):
     # Signal for thread-safe updates
     text_received = pyqtSignal(str, str, int)  # original, translated, id
     translation_received = pyqtSignal(int, str)  # id, translated
+    partial_received = pyqtSignal(int, str, str)  # id, original, translated
     status_received = pyqtSignal(str)
 
     def __init__(
@@ -65,6 +68,7 @@ class OverlayWindow(QWidget):
         # Connect signals
         self.text_received.connect(self._on_text)
         self.translation_received.connect(self._on_translation)
+        self.partial_received.connect(self._on_partial)
         self.status_received.connect(self._on_status)
 
     def _setup_ui(self, opacity: float):
@@ -144,6 +148,10 @@ class OverlayWindow(QWidget):
         """Thread-safe method to add text."""
         self.text_received.emit(original, translated, entry_id)
 
+    def set_partial(self, entry_id: int, original: str, translated: str):
+        """Thread-safe method to show or update a live preview."""
+        self.partial_received.emit(entry_id, original, translated)
+
     def set_translation(self, entry_id: int, translated: str):
         """Thread-safe method to fill in the translation of an existing entry."""
         self.translation_received.emit(entry_id, translated)
@@ -152,19 +160,53 @@ class OverlayWindow(QWidget):
         """Thread-safe method to update status."""
         self.status_received.emit(status)
 
-    def _on_text(self, original: str, translated: str, entry_id: int):
-        self.placeholder.hide()
+    def _find_entry(self, entry_id: int) -> TextEntry | None:
+        if entry_id < 0:
+            return None
+        return next((e for e in self._entries if e.id == entry_id), None)
 
-        entry = TextEntry(original, translated, time.time(), entry_id)
-        self._entries.append(entry)
+    def _on_text(self, original: str, translated: str, entry_id: int):
+        entry = self._find_entry(entry_id)
+
+        if not original:
+            # Final pass found no speech: drop the preview
+            if entry:
+                self._entries = deque((e for e in self._entries if e is not entry), maxlen=self.max_lines)
+                self._rebuild_display()
+            return
+
+        self.placeholder.hide()
+        if entry:
+            # Replace the preview in place; keep its translation until the final one arrives
+            entry.original = original
+            entry.partial = False
+            if translated:
+                entry.translated = translated
+                entry.translation_pending = False
+            else:
+                entry.translation_pending = bool(entry.translated)
+        else:
+            self._entries.append(TextEntry(original, translated, time.time(), entry_id))
+        self._rebuild_display()
+
+    def _on_partial(self, entry_id: int, original: str, translated: str):
+        entry = self._find_entry(entry_id)
+        if entry and not entry.partial:
+            return  # already final
+        self.placeholder.hide()
+        if entry:
+            entry.original = original
+            entry.translated = translated or entry.translated
+        else:
+            self._entries.append(TextEntry(original, translated, time.time(), entry_id, partial=True))
         self._rebuild_display()
 
     def _on_translation(self, entry_id: int, translated: str):
-        for entry in self._entries:
-            if entry.id == entry_id:
-                entry.translated = translated
-                self._rebuild_display()
-                return
+        entry = self._find_entry(entry_id)
+        if entry:
+            entry.translated = translated
+            entry.translation_pending = False
+            self._rebuild_display()
 
     def _on_status(self, status: str):
         self.status_label.setText(status)
@@ -194,7 +236,7 @@ class OverlayWindow(QWidget):
         # Original
         orig_label = QLabel(entry.original)
         orig_label.setFont(font)
-        orig_label.setStyleSheet("color: #ffffff;")
+        orig_label.setStyleSheet("color: #9a9a9a;" if entry.partial else "color: #ffffff;")
         orig_label.setWordWrap(True)
         layout.addWidget(orig_label)
 
@@ -202,7 +244,8 @@ class OverlayWindow(QWidget):
         if entry.translated:
             trans_label = QLabel(entry.translated)
             trans_label.setFont(QFont("Microsoft JhengHei UI", self.font_size))
-            trans_label.setStyleSheet("color: #7cb7ff;")
+            dim = entry.partial or entry.translation_pending
+            trans_label.setStyleSheet("color: #6f8fb3;" if dim else "color: #7cb7ff;")
             trans_label.setWordWrap(True)
             layout.addWidget(trans_label)
 

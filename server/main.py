@@ -89,12 +89,22 @@ class TranscriptionServer:
         self._buffer_duration = 0.0
         self._sample_rate = 16000
         self._end_silence = 0.5  # Silence after speech that ends an utterance
-        self._max_duration = 5.0  # Maximum seconds before forced processing
+        self._max_duration = 8.0  # Maximum seconds before forced processing
+        self._partial_interval = 0.8  # Seconds between live previews of an unfinished utterance
+        self._trailing_silence = 0.0  # Silence after the last speech in the buffer (from VAD)
         self._vad_options = (
             VadOptions(min_silence_duration_ms=100, min_speech_duration_ms=250, speech_pad_ms=0)
             if get_speech_timestamps else None
         )
-        self._next_id = 0
+        self._next_id = 0  # id of the utterance currently being buffered
+
+        # Live previews run in the background; the lock keeps them and the
+        # final pass from using the GPU at the same time
+        self._gpu_lock = asyncio.Lock()
+        self._partial_task: asyncio.Task | None = None
+        self._last_partial_time = 0.0
+        self._partial_sent_for: int | None = None
+        self._partial_cache: tuple[str, str] = ("", "")  # (original, translated)
 
         self._clients: set = set()
 
@@ -161,6 +171,65 @@ class TranscriptionServer:
         cut = self._find_cut_point()
         if cut is not None:
             await self._process_buffer(websocket, cut)
+        else:
+            self._maybe_start_partial(websocket)
+
+    def _maybe_start_partial(self, websocket):
+        """Start a background preview of the utterance so far, if one is due."""
+        # Silence-only buffers are trimmed to 0.5s, so >= 1s means there is speech
+        if self._buffer_duration < 1.0:
+            return
+        if self._partial_task and not self._partial_task.done():
+            return
+        if time.time() - self._last_partial_time < self._partial_interval:
+            return
+        # The speaker has paused: the final pass is probably moments away, keep the GPU free for it
+        if self._trailing_silence >= 0.2:
+            return
+
+        self._last_partial_time = time.time()
+        audio = np.concatenate(self._audio_buffer)
+        self._partial_task = asyncio.create_task(
+            self._send_partial(websocket, self._next_id, audio)
+        )
+
+    async def _send_partial(self, websocket, utterance_id: int, audio: np.ndarray):
+        """Transcribe and translate an unfinished utterance and send it as a preview."""
+        loop = asyncio.get_running_loop()
+        try:
+            async with self._gpu_lock:
+                if utterance_id != self._next_id:
+                    return  # the final result for this utterance was already sent
+                result = await loop.run_in_executor(
+                    None, self.transcriber.transcribe, audio, self._sample_rate
+                )
+                if result is None or not result.text:
+                    return
+
+                cached_original, translated = self._partial_cache
+                if self.translator and result.text != cached_original:
+                    translated = await loop.run_in_executor(
+                        None,
+                        self.translator.translate,
+                        result.text,
+                        self.target_language,
+                        result.language,
+                    )
+                self._partial_cache = (result.text, translated)
+
+                if utterance_id != self._next_id:
+                    return
+                await websocket.send(encode_message({
+                    "type": MessageType.PARTIAL,
+                    "id": utterance_id,
+                    "original": result.text,
+                    "translated": translated,
+                }))
+                self._partial_sent_for = utterance_id
+        except websockets.exceptions.ConnectionClosed:
+            pass
+        except Exception as e:
+            print(f"Preview error: {e}")
 
     def _find_cut_point(self) -> int | None:
         """Decide how many buffered samples to process now (None = keep waiting)."""
@@ -184,7 +253,8 @@ class TranscriptionServer:
             return None
 
         # Speech followed by a pause: the utterance is complete
-        if (len(buffer) - speeches[-1]["end"]) / sr >= self._end_silence:
+        self._trailing_silence = (len(buffer) - speeches[-1]["end"]) / sr
+        if self._trailing_silence >= self._end_silence:
             return len(buffer)
 
         # Too long without a pause: cut at the last gap between words, if there is one
@@ -218,21 +288,33 @@ class TranscriptionServer:
         self._audio_buffer = [rest] if len(rest) else []
         self._buffer_duration = len(rest) / self._sample_rate
 
-        # Transcribe (run in thread to not block)
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            self.transcriber.transcribe,
-            full_audio,
-            self._sample_rate,
-        )
+        loop = asyncio.get_running_loop()
+        async with self._gpu_lock:
+            # From here on this utterance is final: later previews for it are dropped
+            result_id = self._next_id
+            self._next_id += 1
+            self._partial_cache = ("", "")
 
-        if result is None or not result.text:
-            return
+            # Transcribe (run in thread to not block)
+            result = await loop.run_in_executor(
+                None,
+                self.transcriber.transcribe,
+                full_audio,
+                self._sample_rate,
+            )
 
-        # Send the original right away; the translation follows as a separate message
-        result_id = self._next_id
-        self._next_id += 1
+            if result is None or not result.text:
+                if self._partial_sent_for == result_id:
+                    # A preview is on screen but the final pass found nothing: remove it
+                    await websocket.send(encode_message({
+                        "type": MessageType.RESULT, "id": result_id, "original": "", "translated": "",
+                    }))
+                return
+
+            await self._send_final(websocket, loop, result_id, result)
+
+    async def _send_final(self, websocket, loop, result_id: int, result):
+        """Send the final original immediately, then its translation as a separate message."""
         await websocket.send(encode_message({
             "type": MessageType.RESULT,
             "id": result_id,
