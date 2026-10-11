@@ -77,20 +77,20 @@ if ($Interactive -or ([string]::IsNullOrWhiteSpace($Transcriber) -and [string]::
 
     # Translator selection
     $translators = @(
-        "google - Google Translate (free, fast)",
+        "local  - NLLB local model (GPU, recommended)",
+        "google - Google Translate (free, may be blocked)",
         "deepl  - DeepL API (needs key)",
-        "local  - NLLB local model (offline)",
         "none   - No translation"
     )
     $trIdx = Show-Menu -Title "Select Translator:" -Options $translators -Default 0
-    $Translator = @("google", "deepl", "local", "none")[$trIdx]
+    $Translator = @("local", "google", "deepl", "none")[$trIdx]
 
     Write-Host ""
 }
 
 # Apply defaults
 if ([string]::IsNullOrWhiteSpace($Transcriber)) { $Transcriber = "parakeet" }
-if ([string]::IsNullOrWhiteSpace($Translator)) { $Translator = "google" }
+if ([string]::IsNullOrWhiteSpace($Translator)) { $Translator = "local" }
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Voice Analyzer Server (WSL)" -ForegroundColor Cyan

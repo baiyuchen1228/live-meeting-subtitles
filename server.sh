@@ -118,22 +118,22 @@ if [ "$INTERACTIVE" = true ] || { [ -z "$TRANSCRIBER" ] && [ -z "$TRANSLATOR" ];
     esac
 
     # Translator selection
-    translators=("google - Google Translate (free, fast)" "deepl  - DeepL API (needs key)" "local  - NLLB local model (offline)" "none   - No translation")
+    translators=("local  - NLLB local model (GPU, recommended)" "google - Google Translate (free, may be blocked)" "deepl  - DeepL API (needs key)" "none   - No translation")
     tr_idx=$(show_menu "Select Translator:" "${translators[@]}")
     case $tr_idx in
-        0) TRANSLATOR="google" ;;
-        1) TRANSLATOR="deepl" ;;
-        2) TRANSLATOR="local" ;;
+        0) TRANSLATOR="local" ;;
+        1) TRANSLATOR="google" ;;
+        2) TRANSLATOR="deepl" ;;
         3) TRANSLATOR="none" ;;
-        *) TRANSLATOR="google" ;;
+        *) TRANSLATOR="local" ;;
     esac
 
     echo ""
 fi
 
 # Apply defaults
-[ -z "$TRANSCRIBER" ] && TRANSCRIBER="whisper"
-[ -z "$TRANSLATOR" ] && TRANSLATOR="google"
+[ -z "$TRANSCRIBER" ] && TRANSCRIBER="parakeet"
+[ -z "$TRANSLATOR" ] && TRANSLATOR="local"
 
 echo -e "${CYAN}========================================${NC}"
 echo -e "${CYAN}  Voice Analyzer Server${NC}"

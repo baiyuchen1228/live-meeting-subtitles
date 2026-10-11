@@ -42,10 +42,10 @@ class TranscriptionServer:
         self,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
-        transcriber_engine: str = "whisper",
+        transcriber_engine: str = "parakeet",
         model: str = "large-v3",
         device: str = "cuda",
-        translation_provider: str = "google",
+        translation_provider: str = "local",
         target_language: str = "ZH-TW",
         source_language: str = "en",
     ):
@@ -390,12 +390,12 @@ def main():
     parser = argparse.ArgumentParser(description="Voice Transcription Server")
     parser.add_argument("--host", default=DEFAULT_HOST, help="Host to bind to")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port to bind to")
-    parser.add_argument("--transcriber", default="whisper",
+    parser.add_argument("--transcriber", default="parakeet",
                         choices=["whisper", "parakeet"],
                         help="Transcription engine (parakeet is ~2x faster)")
     parser.add_argument("--model", default="large-v3", help="Whisper model name")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
-    parser.add_argument("--translator", default="google",
+    parser.add_argument("--translator", default="local",
                         choices=["deepl", "google", "local", "none"])
     parser.add_argument("--target-lang", default="ZH-TW", help="Target language for translation")
     parser.add_argument("--source-lang", default="en", help="Source language (or 'auto')")
