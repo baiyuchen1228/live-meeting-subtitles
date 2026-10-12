@@ -2,10 +2,10 @@
 Re-translate the final English of an earlier run with another translator,
 without streaming the audio again (minutes instead of an hour).
 
-The new run keeps the original transcription and latency events and replaces
-each final translation; its arrival time is the final's time plus the measured
-translation time. Score it with eval.score as usual (English and latency
-columns are unchanged, only the translation columns differ).
+The new run keeps the original transcription events and replaces each final
+translation. Use it to compare translation quality only: it does not simulate
+GPU queueing or the cost of preview translations, so eval.score leaves the
+latency columns blank for it. Latency conclusions need a real eval.run.
 
 Usage:
   python -m eval.retranslate --from baseline-nllb600m --label opus --translator opus

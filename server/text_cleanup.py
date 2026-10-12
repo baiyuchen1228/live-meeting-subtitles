@@ -8,7 +8,8 @@ to the translator. The English shown on screen is left as transcribed.
 
 import re
 
-_FILLERS = re.compile(r"\b(?:mm-hmm|uh-huh|uh+|um+|uhm|erm|hmm+|mm+|mhm)\b[,.]?", re.IGNORECASE)
+# "mm" is not here: it is also a unit (5 mm) and a plausible variable name
+_FILLERS = re.compile(r"\b(?:mm-hmm|uh-huh|uh+|um+|uhm|erm|hmm+|mhm)\b[,.]?", re.IGNORECASE)
 # The same 1-3 word phrase repeated back to back: "and and", "I think I think"
 _REPEATS = re.compile(r"\b((?:[\w']+\s+){0,2}[\w']+)(?:[\s,]+\1\b)+", re.IGNORECASE)
 

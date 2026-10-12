@@ -117,6 +117,10 @@ def score_video(run: dict, samples: int) -> dict:
         "final_p50": pct(final_lags, 0.5), "final_p90": pct(final_lags, 0.9),
         "translation_after_final_p50": pct(trans_lags, 0.5),
     }
+    if run.get("retranslated_from"):
+        # eval.retranslate copies the transcription timing of another run and adds
+        # bare translation time: no GPU queueing, no preview cost. Not a latency measurement.
+        latency = {"utterances": len(utts), "not_measured": f"retranslated from {run['retranslated_from']}"}
 
     # Translation
     pairs = [(finals[i]["original"], translations.get(i, "")) for i in order]
@@ -170,9 +174,12 @@ def main():
           f"{'short%':>8}{'zh/word':>8}{'chrF':>6}")
     for s in scores:
         e, l, t = s["english"], s["latency"], s["translation"]
-        print(f"{s['video']['name']:<24}{fmt(e['wer']):>6}{fmt(l['first_text_p50']):>10}{fmt(l['first_text_p90']):>6}"
-              f"{fmt(l['final_p50']):>10}{fmt(l['final_p90']):>6}{fmt(t['short_share']):>8}"
+        print(f"{s['video']['name']:<24}{fmt(e['wer']):>6}{fmt(l.get('first_text_p50')):>10}{fmt(l.get('first_text_p90')):>6}"
+              f"{fmt(l.get('final_p50')):>10}{fmt(l.get('final_p90')):>6}{fmt(t['short_share']):>8}"
               f"{fmt(t['zh_chars_per_en_word']):>8}{fmt(t.get('chrf')):>6}")
+    if any("not_measured" in s["latency"] for s in scores):
+        print("\nLatency columns are blank: this run came from eval.retranslate, which reuses another run's"
+              "\ntranscription timing. Only eval.run measures latency.")
     print(f"\nDetails and sample translations: {os.path.join(run_dir, 'score.json')}")
 
 

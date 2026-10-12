@@ -16,6 +16,11 @@ python -m eval.score my-test                  # print the table, write eval/resu
   `--server-args "--translator deepl"`), so a server on 9876 is not affected.
 - `--only NAME ...` limits a run to some videos; names are in `videos.json`.
 - `eval/data/` and `eval/results/` are git-ignored.
+- `python -m eval.retranslate --from RUN --label NEW --translator opus` re-translates the
+  English of an earlier run with another translator in a few minutes. It is for comparing
+  **translation quality only**: it reuses the earlier run's transcription timing and does not
+  simulate GPU queueing or preview translations, so `eval.score` leaves its latency columns blank.
+  Latency conclusions need a full `eval.run`.
 
 ## Videos (`videos.json`)
 
