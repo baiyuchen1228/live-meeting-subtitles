@@ -99,7 +99,13 @@ def score_video(run: dict, samples: int) -> dict:
 
     # Latency
     utts = utterances(os.path.join(data_dir, "audio.wav"))
-    text_times = sorted(e["t"] for e in events if e["type"] in ("partial", "result") and e.get("original"))
+    # First appearance of each sentence id: a late final of the previous sentence
+    # must not count as the first text of the next utterance
+    first_seen = {}
+    for e in sorted(events, key=lambda e: e["t"]):
+        if e["type"] in ("partial", "result") and e.get("original"):
+            first_seen.setdefault(e.get("id"), e["t"])
+    text_times = sorted(first_seen.values())
     final_times = sorted(finals[i]["t"] for i in order)
     first_lags, final_lags = [], []
     for start, end in utts:

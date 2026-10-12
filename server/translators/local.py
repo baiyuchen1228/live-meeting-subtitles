@@ -72,7 +72,7 @@ class LocalTranslator(Translator):
             self._model.eval()
             print(f"Model loaded on {self.device}")
 
-    def translate(self, text: str, target_lang: str, source_lang: str | None = None) -> str:
+    def translate(self, text: str, target_lang: str, source_lang: str | None = None, fast: bool = False) -> str:
         if not text.strip():
             return ""
 
@@ -97,7 +97,7 @@ class LocalTranslator(Translator):
                     **inputs,
                     forced_bos_token_id=self._tokenizer.convert_tokens_to_ids(target_code),
                     max_length=256,
-                    num_beams=4,
+                    num_beams=1 if fast else 4,
                     early_stopping=True,
                 )
 

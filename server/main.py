@@ -131,12 +131,13 @@ class TranscriptionServer:
         except Exception as e:
             print(f"Warmup failed (continuing): {e}")
 
-    def _translate(self, text: str, language: str | None) -> str:
-        """Translate transcribed speech, without fillers and false starts."""
+    def _translate(self, text: str, language: str | None, preview: bool = False) -> str:
+        """Translate transcribed speech, without fillers and false starts.
+        Previews are replaced by the final result, so they use the faster, lower-quality mode."""
         cleaned = clean_for_translation(text)
         if not cleaned:
             return ""
-        return self.translator.translate(cleaned, self.target_language, language)
+        return self.translator.translate(cleaned, self.target_language, language, fast=preview)
 
     async def _handle_client(self, websocket):
         """Handle a client connection."""
@@ -217,7 +218,7 @@ class TranscriptionServer:
                 cached_original, translated = self._partial_cache
                 if self.translator and result.text != cached_original:
                     translated = await loop.run_in_executor(
-                        None, self._translate, result.text, result.language
+                        None, self._translate, result.text, result.language, True
                     )
                 self._partial_cache = (result.text, translated)
 

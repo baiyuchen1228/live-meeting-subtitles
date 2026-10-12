@@ -46,8 +46,11 @@ class OpusTranslator(Translator):
             self._tokenizer = MarianTokenizer.from_pretrained(self.model_name)
             dtype = torch.float16 if self.device == "cuda" else torch.float32
             self._model = MarianMTModel.from_pretrained(self.model_name, dtype=dtype).to(self.device).eval()
+            # We pass max_new_tokens; drop the config's max_length so transformers
+            # does not log a warning on every call
+            self._model.generation_config.max_length = None
 
-    def translate(self, text: str, target_lang: str, source_lang: str | None = None) -> str:
+    def translate(self, text: str, target_lang: str, source_lang: str | None = None, fast: bool = False) -> str:
         if not text.strip():
             return ""
         if not target_lang.upper().startswith("ZH"):
@@ -60,7 +63,7 @@ class OpusTranslator(Translator):
             max_new = min(256, 3 * inputs["input_ids"].shape[1] + 8)
             with torch.no_grad():
                 generated = self._model.generate(
-                    **inputs, max_new_tokens=max_new, num_beams=4, no_repeat_ngram_size=3
+                    **inputs, max_new_tokens=max_new, num_beams=1 if fast else 4, no_repeat_ngram_size=3
                 )
             out = self._tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
         except Exception as e:

@@ -29,7 +29,7 @@ class DeepLTranslator(Translator):
     def name(self) -> str:
         return "DeepL"
 
-    def translate(self, text: str, target_lang: str, source_lang: str | None = None) -> str:
+    def translate(self, text: str, target_lang: str, source_lang: str | None = None, fast: bool = False) -> str:
         if not text.strip():
             return ""
 

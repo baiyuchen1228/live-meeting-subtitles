@@ -18,7 +18,7 @@ class Translator(ABC):
         pass
 
     @abstractmethod
-    def translate(self, text: str, target_lang: str, source_lang: str | None = None) -> str:
+    def translate(self, text: str, target_lang: str, source_lang: str | None = None, fast: bool = False) -> str:
         """
         Translate text.
 
@@ -26,6 +26,7 @@ class Translator(ABC):
             text: Text to translate
             target_lang: Target language code (e.g., "RU", "DE")
             source_lang: Source language code or None for auto-detect
+            fast: Trade quality for speed (used for live previews); may be ignored
 
         Returns:
             Translated text
