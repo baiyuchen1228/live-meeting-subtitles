@@ -1,0 +1,5 @@
+# Evaluation tools (WSL venv)
+yt-dlp
+jiwer
+opencc-python-reimplemented
+sacrebleu

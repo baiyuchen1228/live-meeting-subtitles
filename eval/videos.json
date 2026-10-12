@@ -1,0 +1,8 @@
+[
+  {"id": "Ti5vfu9arXQ", "name": "google-coding", "channel": "Life at Google", "kind": "coding", "start": 120, "duration": 600},
+  {"id": "_K-eupuDVEc", "name": "spotify-system-design", "channel": "IGotAnOffer: Engineering", "kind": "system design", "start": 120, "duration": 600},
+  {"id": "S1DvEdR0iUo", "name": "india-system-design", "channel": "Life at Google", "kind": "system design (Indian English)", "start": 120, "duration": 600},
+  {"id": "Gg318hR5JY0", "name": "google-sysdesign-tips", "channel": "Life at Google", "kind": "advice", "start": 0, "duration": 324},
+  {"id": "XAJeXlY6w-c", "name": "pm-mock", "channel": "IGotAnOffer: Product management", "kind": "product manager", "start": 120, "duration": 600},
+  {"id": "7Hd_8nrNrZ0", "name": "pm-behavioral", "channel": "IGotAnOffer: Product management", "kind": "behavioral", "start": 60, "duration": 600}
+]

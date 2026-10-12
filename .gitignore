@@ -53,3 +53,7 @@ logs/*.json
 *.env
 config.local.yaml
 .claude/settings.local.json
+
+# Downloaded evaluation material and results
+eval/data/
+eval/results/
