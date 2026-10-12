@@ -12,6 +12,9 @@ def create_translator(provider: str, **kwargs) -> Translator:
     elif provider == "local":
         from .local import LocalTranslator
         return LocalTranslator(**kwargs)
+    elif provider == "opus":
+        from .opus import OpusTranslator
+        return OpusTranslator(**kwargs)
     elif provider == "none" or provider is None:
         return None
     else:

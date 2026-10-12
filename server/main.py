@@ -33,6 +33,7 @@ from shared.protocol import (
 )
 from server.transcribers import create_transcriber, BaseTranscriber
 from server.translators import create_translator, Translator
+from server.text_cleanup import clean_for_translation
 
 
 class TranscriptionServer:
@@ -45,7 +46,7 @@ class TranscriptionServer:
         transcriber_engine: str = "parakeet",
         model: str = "large-v3",
         device: str = "cuda",
-        translation_provider: str = "local",
+        translation_provider: str = "opus",
         target_language: str = "ZH-TW",
         source_language: str = "en",
     ):
@@ -130,6 +131,13 @@ class TranscriptionServer:
         except Exception as e:
             print(f"Warmup failed (continuing): {e}")
 
+    def _translate(self, text: str, language: str | None) -> str:
+        """Translate transcribed speech, without fillers and false starts."""
+        cleaned = clean_for_translation(text)
+        if not cleaned:
+            return ""
+        return self.translator.translate(cleaned, self.target_language, language)
+
     async def _handle_client(self, websocket):
         """Handle a client connection."""
         self._clients.add(websocket)
@@ -209,11 +217,7 @@ class TranscriptionServer:
                 cached_original, translated = self._partial_cache
                 if self.translator and result.text != cached_original:
                     translated = await loop.run_in_executor(
-                        None,
-                        self.translator.translate,
-                        result.text,
-                        self.target_language,
-                        result.language,
+                        None, self._translate, result.text, result.language
                     )
                 self._partial_cache = (result.text, translated)
 
@@ -331,11 +335,7 @@ class TranscriptionServer:
 
         try:
             translated = await loop.run_in_executor(
-                None,
-                self.translator.translate,
-                result.text,
-                self.target_language,
-                result.language,
+                None, self._translate, result.text, result.language
             )
         except Exception as e:
             print(f"Translation error: {e}")
@@ -395,8 +395,9 @@ def main():
                         help="Transcription engine (parakeet is ~2x faster)")
     parser.add_argument("--model", default="large-v3", help="Whisper model name")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
-    parser.add_argument("--translator", default="local",
-                        choices=["deepl", "google", "local", "none"])
+    parser.add_argument("--translator", default="opus",
+                        choices=["opus", "local", "deepl", "google", "none"],
+                        help="opus = Opus-MT en-zh (default), local = NLLB")
     parser.add_argument("--target-lang", default="ZH-TW", help="Target language for translation")
     parser.add_argument("--source-lang", default="en", help="Source language (or 'auto')")
 

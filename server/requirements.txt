@@ -17,6 +17,7 @@ nemo_toolkit[asr]>=2.0.0
 deep-translator>=1.11.0  # Google Translate (free)
 deepl>=1.16.0            # DeepL API (needs key)
 
-# Local translation (optional, large download)
-# transformers>=4.35.0
-# sentencepiece>=0.1.99
+# Local translation: Opus-MT (default) and NLLB
+transformers>=4.35.0
+sentencepiece>=0.1.99
+opencc-python-reimplemented  # Opus-MT writes Simplified Chinese; converted to zh-TW

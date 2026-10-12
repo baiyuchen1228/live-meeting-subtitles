@@ -90,7 +90,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: ./server.sh [options]"
             echo "  -i, --interactive   Interactive mode (choose settings)"
             echo "  -t, --transcriber   whisper | parakeet"
-            echo "  --translator        google | deepl | local | none"
+            echo "  --translator        opus | local | google | deepl | none"
             echo "  --port              Server port (default: 9876)"
             echo "  --stop              Stop running server"
             echo ""
@@ -118,14 +118,15 @@ if [ "$INTERACTIVE" = true ] || { [ -z "$TRANSCRIBER" ] && [ -z "$TRANSLATOR" ];
     esac
 
     # Translator selection
-    translators=("local  - NLLB local model (GPU, recommended)" "google - Google Translate (free, may be blocked)" "deepl  - DeepL API (needs key)" "none   - No translation")
+    translators=("opus   - Opus-MT en-zh (GPU, recommended)" "local  - NLLB local model (GPU, drops content)" "google - Google Translate (free, may be blocked)" "deepl  - DeepL API (needs key)" "none   - No translation")
     tr_idx=$(show_menu "Select Translator:" "${translators[@]}")
     case $tr_idx in
-        0) TRANSLATOR="local" ;;
-        1) TRANSLATOR="google" ;;
-        2) TRANSLATOR="deepl" ;;
-        3) TRANSLATOR="none" ;;
-        *) TRANSLATOR="local" ;;
+        0) TRANSLATOR="opus" ;;
+        1) TRANSLATOR="local" ;;
+        2) TRANSLATOR="google" ;;
+        3) TRANSLATOR="deepl" ;;
+        4) TRANSLATOR="none" ;;
+        *) TRANSLATOR="opus" ;;
     esac
 
     echo ""
@@ -133,7 +134,7 @@ fi
 
 # Apply defaults
 [ -z "$TRANSCRIBER" ] && TRANSCRIBER="parakeet"
-[ -z "$TRANSLATOR" ] && TRANSLATOR="local"
+[ -z "$TRANSLATOR" ] && TRANSLATOR="opus"
 
 echo -e "${CYAN}========================================${NC}"
 echo -e "${CYAN}  Voice Analyzer Server${NC}"

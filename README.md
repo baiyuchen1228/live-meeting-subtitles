@@ -19,7 +19,7 @@ Captures system audio, transcribes speech using Parakeet or Whisper, and display
 │   Windows Client     │  ───────────────►  │      WSL Server            │
 │                      │                    │                            │
 │  • WASAPI capture    │    audio bytes     │  • Parakeet / Whisper      │
-│  • PyQt6 overlay     │  ◄───────────────  │  • NLLB / Google / DeepL   │
+│  • PyQt6 overlay     │  ◄───────────────  │  • Opus-MT / NLLB / DeepL  │
 │                      │    JSON results    │    translation (CUDA)      │
 └──────────────────────┘                    └────────────────────────────┘
 ```
@@ -64,8 +64,6 @@ pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu1
 # Install dependencies
 pip install -r server/requirements.txt
 
-# For the local NLLB translator (recommended)
-pip install transformers sentencepiece
 
 # Verify CUDA is available
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
@@ -102,7 +100,7 @@ Start the server first, then the client.
 ```bash
 cd ~/projects/live-meeting-subtitles
 source venv/bin/activate
-./server.sh -t parakeet --translator local
+./server.sh -t parakeet --translator opus
 ```
 
 Use `./server.sh -i` to pick the transcriber and translator from a menu, and `./server.sh --stop` to stop it.
@@ -111,11 +109,11 @@ Models are downloaded on first run; the server is ready when it prints `Starting
 | Option | Values |
 |---|---|
 | `-t`, `--transcriber` | `parakeet` (faster, recommended), `whisper` |
-| `--translator` | `local` (NLLB on GPU, recommended), `google` (free, may be rate-limited), `deepl` (needs `DEEPL_API_KEY`), `none` |
+| `--translator` | `opus` (Opus-MT en-zh on GPU + OpenCC, default), `local` (NLLB, often drops parts of sentences), `deepl` (needs `DEEPL_API_KEY`), `google` (free, may be blocked), `none` |
 | `--port` | Server port (default `9876`) |
 | `TARGET_LANG` env var | Target language (default `ZH-TW`), e.g. `TARGET_LANG=JA ./server.sh` |
 
-Supported target languages: `ZH-TW` (Traditional Chinese), `ZH` (Simplified Chinese), `EN`, `JA`, `KO`, `RU`, `DE`, `FR`, `ES`, `IT`, `PT`, `UK`, `PL`.
+The default translator (`opus`) translates English to `ZH-TW` (Traditional Chinese) or `ZH` (Simplified) only. For other targets (`JA`, `KO`, `RU`, `DE`, `FR`, `ES`, `IT`, `PT`, `UK`, `PL`) use `--translator local` or `deepl`.
 
 Running `python -m server.main` directly also works; see `python -m server.main --help` for all options (`--model`, `--device`, `--target-lang`, `--source-lang`).
 
@@ -184,7 +182,7 @@ The client needs `PyAudioWPatch` (not plain `pyaudio`): `pip install -r client/r
 PyTorch nightly ships CUDA 13, but faster-whisper's ctranslate2 needs CUDA 12 cuBLAS: `pip install nvidia-cublas-cu12` (included in `server/requirements.txt`). Parakeet does not need it.
 
 ### `Google Translate error: ... too many requests`
-Google blocks some IPs (common on campus or shared networks) regardless of request rate. Use `--translator local` or `--translator deepl`.
+Google blocks some IPs (common on campus or shared networks) regardless of request rate. Use `--translator opus` (default) or `--translator deepl`.
 
 ### `You are sending unauthenticated requests to the HF Hub`
 Harmless. Once models are downloaded, `export HF_HUB_OFFLINE=1` skips the online check and starts faster.
@@ -204,7 +202,8 @@ live-meeting-subtitles/
 │   └── translators/       # Translation backends
 │       ├── google.py      # Google Translate (free)
 │       ├── deepl.py       # DeepL API
-│       └── local.py       # NLLB local model
+│       ├── local.py       # NLLB local model
+│       └── opus.py        # Opus-MT en-zh (default)
 │
 ├── client/                 # Windows (Python)
 │   ├── main.py            # WebSocket client + UI

@@ -11,7 +11,7 @@ param(
     [ValidateSet("whisper", "parakeet")]
     [string]$Transcriber = "",
 
-    [ValidateSet("google", "deepl", "local", "none")]
+    [ValidateSet("opus", "local", "google", "deepl", "none")]
     [string]$Translator = "",
 
     [int]$Port = 9876,
@@ -44,7 +44,7 @@ if ($Help) {
     Write-Host "Usage: .\server.ps1 [options]"
     Write-Host "  -Interactive    Interactive mode (choose settings)"
     Write-Host "  -Transcriber    whisper | parakeet"
-    Write-Host "  -Translator     google | deepl | local | none"
+    Write-Host "  -Translator     opus | local | google | deepl | none"
     Write-Host "  -Port           Server port (default: 9876)"
     Write-Host "  -Stop           Stop running server"
     exit 0
@@ -77,20 +77,21 @@ if ($Interactive -or ([string]::IsNullOrWhiteSpace($Transcriber) -and [string]::
 
     # Translator selection
     $translators = @(
-        "local  - NLLB local model (GPU, recommended)",
+        "opus   - Opus-MT en-zh (GPU, recommended)",
+        "local  - NLLB local model (GPU, drops content)",
         "google - Google Translate (free, may be blocked)",
         "deepl  - DeepL API (needs key)",
         "none   - No translation"
     )
     $trIdx = Show-Menu -Title "Select Translator:" -Options $translators -Default 0
-    $Translator = @("local", "google", "deepl", "none")[$trIdx]
+    $Translator = @("opus", "local", "google", "deepl", "none")[$trIdx]
 
     Write-Host ""
 }
 
 # Apply defaults
 if ([string]::IsNullOrWhiteSpace($Transcriber)) { $Transcriber = "parakeet" }
-if ([string]::IsNullOrWhiteSpace($Translator)) { $Translator = "local" }
+if ([string]::IsNullOrWhiteSpace($Translator)) { $Translator = "opus" }
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Voice Analyzer Server (WSL)" -ForegroundColor Cyan
