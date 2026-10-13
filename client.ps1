@@ -81,19 +81,25 @@ if ($Interactive -or [string]::IsNullOrWhiteSpace($Device)) {
     Write-Host "`nDetecting audio devices..." -ForegroundColor Gray
     $deviceOutput = python -m client.main --list-devices 2>&1
     $devices = @()
+    $lastUsed = $null
     foreach ($line in $deviceOutput) {
         if ($line -match "^\s*-\s+(.+?)\s*\[Loopback\]") {
             $devices += $Matches[1].Trim()
+        } elseif ($line -match "^Last used:\s*(.+?)(\s*\[Loopback\])?\s*$") {
+            $lastUsed = $Matches[1].Trim()
         }
     }
 
     if ($devices.Count -gt 0) {
-        # Find preferred device (virtual cables first)
-        $defaultIdx = 0
-        for ($i = 0; $i -lt $devices.Count; $i++) {
-            if ($devices[$i] -match "CABLE|VB-Audio|Virtual") {
-                $defaultIdx = $i
-                break
+        # Preselect the device used last time, else the first virtual cable, else the first
+        $defaultIdx = [array]::IndexOf($devices, $lastUsed)
+        if ($defaultIdx -lt 0) {
+            $defaultIdx = 0
+            for ($i = 0; $i -lt $devices.Count; $i++) {
+                if ($devices[$i] -match "CABLE|VB-Audio|Virtual") {
+                    $defaultIdx = $i
+                    break
+                }
             }
         }
 

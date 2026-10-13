@@ -125,7 +125,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\client.ps1
 ```
 
-Pick the audio device you hear the meeting on (speakers or headset). The client captures what that device plays (WASAPI loopback), so the other side of the call is transcribed, not your microphone.
+Pick the audio device you hear the meeting on (speakers or headset). The device that worked last time is preselected, so next time you can just press Enter; running `python -m client.main` without `--device` also uses it while it is still connected. The client captures what that device plays (WASAPI loopback), so the other side of the call is transcribed, not your microphone.
 
 | Command | What it does |
 |---|---|

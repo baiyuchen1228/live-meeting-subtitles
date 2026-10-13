@@ -23,6 +23,7 @@ from PyQt6.QtCore import QTimer
 from shared.protocol import DEFAULT_HOST, DEFAULT_PORT, MessageType, decode_message
 from client.audio_capture import AudioCapture
 from client.overlay import OverlayWindow
+from client.settings import last_device, save_last_device
 
 
 class VoiceClient:
@@ -185,10 +186,18 @@ class VoiceClient:
         self._loop = asyncio.get_event_loop()
         self._running = True
 
-        # Start audio capture (runs independently)
+        # Start audio capture (runs independently). Without --device, use the device
+        # that worked last time if it is still there; otherwise the first loopback device.
+        device = self.device
+        if device is None:
+            last = last_device()
+            if last and last in AudioCapture.list_devices():
+                print(f"Using last used audio device: {last}")
+                device = last
         self._audio_capture = AudioCapture(
             on_audio=self._on_audio,
-            device_name=self.device,
+            device_name=device,
+            on_device_opened=save_last_device,
         )
         self._audio_capture.start()
 
@@ -254,10 +263,14 @@ def main():
     # List devices
     if args.list_devices:
         from client.audio_capture import AudioCapture
-        ac = AudioCapture(lambda x: None)
+        devices = AudioCapture.list_devices()
         print("Available loopback devices:")
-        for dev in ac.list_devices():
+        for dev in devices:
             print(f"  - {dev}")
+        # client.ps1 / client.sh read this line to preselect the device in their menu
+        last = last_device()
+        if last in devices:
+            print(f"Last used: {last}")
         return
 
     # Create client

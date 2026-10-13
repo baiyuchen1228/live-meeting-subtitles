@@ -51,6 +51,7 @@ class AudioCapture:
         device_name: str | None = None,
         target_sample_rate: int = 16000,
         chunk_duration: float = 0.2,  # smaller chunks let the server detect end of speech sooner
+        on_device_opened: Callable[[str], None] | None = None,
     ):
         """
         Args:
@@ -58,6 +59,7 @@ class AudioCapture:
             device_name: Specific device name or None for default
             target_sample_rate: Target sample rate for output (default 16kHz for Whisper)
             chunk_duration: Duration of each chunk in seconds
+            on_device_opened: Called with the device name once its stream is open
         """
         if not HAS_PYAUDIO:
             raise ImportError("pyaudiowpatch required: pip install pyaudiowpatch")
@@ -66,12 +68,14 @@ class AudioCapture:
         self.device_name = device_name
         self.target_sample_rate = target_sample_rate
         self.chunk_duration = chunk_duration
+        self.on_device_opened = on_device_opened
 
         self._running = False
         self._thread: threading.Thread | None = None
         self._pa: pyaudio.PyAudio | None = None
 
-    def list_devices(self) -> list[str]:
+    @staticmethod
+    def list_devices() -> list[str]:
         """List available loopback devices."""
         devices = []
         pa = pyaudio.PyAudio()
@@ -173,6 +177,11 @@ class AudioCapture:
                 input_device_index=device_index,
                 frames_per_buffer=chunk_samples,
             )
+            if self.on_device_opened:
+                try:
+                    self.on_device_opened(device["name"])
+                except Exception as e:
+                    print(f"Could not remember audio device: {e}")
 
             try:
                 while self._running:

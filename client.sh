@@ -154,17 +154,31 @@ if [ "$INTERACTIVE" = true ] || [ -z "$DEVICE" ]; then
     DEVICE_OUTPUT=$(run_win_python --list-devices 2>&1) || true
 
     # Parse device names (format: "  - Device Name [Loopback]")
-    mapfile -t DEVICES < <(echo "$DEVICE_OUTPUT" | grep -E '^\s*-\s+' | sed 's/^\s*-\s*//' | sed 's/\s*\[Loopback\]\s*$//')
+    # -a: device names come from Windows in the local code page (e.g. CP950), which grep
+    # would otherwise treat as binary and drop the lines with Chinese names
+    mapfile -t DEVICES < <(echo "$DEVICE_OUTPUT" | grep -aE '^\s*-\s+' | sed 's/^\s*-\s*//' | sed 's/\s*\[Loopback\]\s*$//')
+
+    # Device used last time (printed by --list-devices as "Last used: <name> [Loopback]")
+    LAST_USED=$(echo "$DEVICE_OUTPUT" | tr -d '\r' | sed -n 's/^Last used:\s*//p' | sed 's/\s*\[Loopback\]\s*$//')
 
     if [ ${#DEVICES[@]} -gt 0 ]; then
-        # Find default loopback device (prefer virtual cables, then any)
-        DEFAULT_IDX=0
+        # Preselect the device used last time, else the first virtual cable, else the first
+        DEFAULT_IDX=-1
         for i in "${!DEVICES[@]}"; do
-            if [[ "${DEVICES[$i]}" =~ (CABLE|VB-Audio|Virtual) ]]; then
+            if [ -n "$LAST_USED" ] && [ "${DEVICES[$i]}" = "$LAST_USED" ]; then
                 DEFAULT_IDX=$i
                 break
             fi
         done
+        if [ $DEFAULT_IDX -lt 0 ]; then
+            DEFAULT_IDX=0
+            for i in "${!DEVICES[@]}"; do
+                if [[ "${DEVICES[$i]}" =~ (CABLE|VB-Audio|Virtual) ]]; then
+                    DEFAULT_IDX=$i
+                    break
+                fi
+            done
+        fi
 
         # Show menu
         echo -e "\n${YELLOW}Select Audio Device:${NC}"
