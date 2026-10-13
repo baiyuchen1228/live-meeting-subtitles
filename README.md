@@ -141,7 +141,12 @@ The overlay shows each sentence as it is recognized:
 - **White**: final English original, replaces the preview when the sentence ends
 - **Blue**: translation (dimmed while it is still the preview's translation)
 
-Drag the window with the left mouse button to move it; click `×` to close it.
+- **Move**: drag inside the box
+- **Resize**: drag an edge or corner of the box. After a manual resize the height stays fixed: the newest subtitle sits at the bottom and older ones are pushed out at the top
+- **Automatic height again**: double-click the box
+- **Close**: click `×`
+
+Size and position are remembered for the next run (Windows registry, `HKEY_CURRENT_USER\Software\live-meeting-subtitles\overlay`).
 
 Tip: test with an English YouTube video before a real meeting.
 

@@ -1,22 +1,50 @@
 """
 Overlay UI for displaying transcription and translation.
 Semi-transparent window that stays on top.
+
+Drag inside the box to move it; drag its edges or corners to resize. After a
+manual resize the height stays fixed (newest subtitle at the bottom, older ones
+pushed out at the top); double-click the box to go back to automatic height.
+Size and position are remembered between runs.
 """
 
 from collections import deque
 from dataclasses import dataclass
+import ctypes
+import ctypes.wintypes
+import logging
+import os
+import sys
+import tempfile
 import time
 
 from PyQt6.QtWidgets import (
     QApplication,
+    QLayout,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint
-from PyQt6.QtGui import QFont, QMouseEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QSettings, QTimer
+from PyQt6.QtGui import QFont, QMouseEvent, QCursor
+
+# Width of the band inside the box's edges that resizes the window
+RESIZE_MARGIN = 8
+MIN_WIDTH, MIN_HEIGHT = 320, 120
+
+# Windows sends these when its native resize loop (startSystemResize) starts and ends
+WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE = 0x0231, 0x0232
+WM_SYSCOMMAND, WM_SIZING = 0x0112, 0x0214
+
+# OVERLAY_DEBUG=1 logs window sizing decisions to %TEMP%\overlay_debug.log
+log = logging.getLogger("overlay")
+if os.environ.get("OVERLAY_DEBUG"):
+    _handler = logging.FileHandler(os.path.join(tempfile.gettempdir(), "overlay_debug.log"), mode="w", encoding="utf-8")
+    _handler.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(message)s", "%H:%M:%S"))
+    log.addHandler(_handler)
+    log.setLevel(logging.DEBUG)
 
 
 @dataclass
@@ -45,13 +73,26 @@ class OverlayWindow(QWidget):
         font_size: int = 15,
         opacity: float = 0.9,
         position: str = "bottom-right",
+        remember: bool = True,
+        settings_name: str = "overlay",
     ):
         super().__init__()
 
         self.max_lines = max_lines
         self.font_size = font_size
         self._entries: deque[TextEntry] = deque(maxlen=max_lines)
+        self._entry_widgets: list[QWidget] = []
         self._drag_pos: QPoint | None = None
+
+        # None = height follows the content; a number = height set by the user
+        self._fixed_height: int | None = None
+        self._user_resizing = False
+        self._native_resize_events = False  # True once Windows has reported a resize loop
+        self._fitted_width = 0
+        self._settings = QSettings("live-meeting-subtitles", settings_name) if remember else None
+        # Without native resize-loop messages, treat a pause in resize events as the end
+        self._save_timer = QTimer(self, singleShot=True, interval=400)
+        self._save_timer.timeout.connect(self._end_user_change)
 
         # Window setup
         self.setWindowFlags(
@@ -60,10 +101,12 @@ class OverlayWindow(QWidget):
             Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedWidth(width)
+        self.setMinimumSize(MIN_WIDTH, MIN_HEIGHT)
 
         self._setup_ui(opacity)
-        self._position_window(position)
+        self.resize(width, self.height())
+        if not self._restore_settings():
+            self._position_window(position)
 
         # Connect signals
         self.text_received.connect(self._on_text)
@@ -74,6 +117,10 @@ class OverlayWindow(QWidget):
     def _setup_ui(self, opacity: float):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
+        # The window size is set by _fit_to_content() or the user. Without this the
+        # layout raises the window's minimum height to the labels' minimum size hints,
+        # which overrides resize() (window taller than the screen, fixed height ignored)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
 
         # Container with background
         self.container = QWidget()
@@ -118,6 +165,9 @@ class OverlayWindow(QWidget):
 
         container_layout.addLayout(header)
 
+        # Takes the spare room when the height is fixed, so subtitles sit at the bottom
+        container_layout.addStretch(1)
+
         # Text area
         self.text_layout = QVBoxLayout()
         self.text_layout.setSpacing(10)
@@ -130,11 +180,18 @@ class OverlayWindow(QWidget):
         self.text_layout.addWidget(self.placeholder)
 
         layout.addWidget(self.container)
+        self._track_mouse(self)
+
+    @staticmethod
+    def _track_mouse(widget: QWidget):
+        """Hover moves only reach widgets with tracking on; needed for the resize cursor."""
+        widget.setMouseTracking(True)
+        for child in widget.findChildren(QWidget):
+            child.setMouseTracking(True)
 
     def _position_window(self, position: str):
         screen = QApplication.primaryScreen().availableGeometry()
         margin = 30
-        self.adjustSize()
 
         if "right" in position:
             x = screen.right() - self.width() - margin
@@ -147,6 +204,58 @@ class OverlayWindow(QWidget):
             y = screen.top() + margin
 
         self.move(x, y)
+
+    # Remembered size and position
+
+    def _restore_settings(self) -> bool:
+        if self._settings is None:
+            return False
+        geometry = self._settings.value("geometry")
+        if not geometry:
+            return False
+        self.restoreGeometry(geometry)  # also pulls the window back on screen if needed
+        fixed = int(self._settings.value("fixed_height", 0) or 0)
+        self._fixed_height = fixed if fixed > 0 else None
+        return True
+
+    def _save_settings(self):
+        if self._settings is None:
+            return
+        self._settings.setValue("geometry", self.saveGeometry())
+        self._settings.setValue("fixed_height", self._fixed_height or 0)
+        self._settings.sync()
+
+    def _end_user_change(self):
+        log.debug("save timer fired: native=%s resizing=%s", self._native_resize_events, self._user_resizing)
+        if self._native_resize_events:
+            return  # WM_EXITSIZEMOVE ends the resize; a pause mid-drag must not
+        self._user_resizing = False
+        self._save_settings()
+
+    def _finish_user_resize(self):
+        log.debug("user resize finished: %dx%d fixed=%s", self.width(), self.height(), self._fixed_height)
+        self._user_resizing = False
+        self._save_settings()
+
+    def nativeEvent(self, event_type, message):
+        if sys.platform == "win32" and bytes(event_type) == b"windows_generic_MSG":
+            msg = ctypes.wintypes.MSG.from_address(int(message))
+            if msg.message in (WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_SYSCOMMAND):
+                log.debug("native msg 0x%04x wParam=0x%x resizing=%s", msg.message, msg.wParam, self._user_resizing)
+            if msg.message == WM_ENTERSIZEMOVE and self._user_resizing:
+                self._native_resize_events = True
+            elif msg.message == WM_EXITSIZEMOVE and self._user_resizing:
+                # This window gets no resize events during the drag: Windows applies the
+                # final size right after this message. Keep treating resizes as the user's
+                # until then, or the new height is taken for our own and undone.
+                QTimer.singleShot(150, self._finish_user_resize)
+        # (False, 0) = not handled, same as the default. Do not call
+        # super().nativeEvent(): with PyQt6 6.7 that crashes the process (access violation)
+        return False, 0
+
+    def closeEvent(self, event):
+        self._save_settings()
+        super().closeEvent(event)
 
     def add_text(self, original: str, translated: str, entry_id: int = -1):
         """Thread-safe method to add text."""
@@ -163,6 +272,19 @@ class OverlayWindow(QWidget):
     def set_status(self, status: str):
         """Thread-safe method to update status."""
         self.status_received.emit(status)
+
+    def set_user_size(self, width: int, height: int):
+        """Apply a size chosen by the user: the height stays fixed from now on."""
+        self._fixed_height = max(MIN_HEIGHT, height)
+        self.resize(max(MIN_WIDTH, width), self._fixed_height)
+        self._fit_to_content()
+
+    def set_auto_height(self):
+        """Go back to a height that follows the content."""
+        log.debug("set_auto_height")
+        self._fixed_height = None
+        self._fit_to_content()
+        self._save_settings()
 
     def _find_entry(self, entry_id: int) -> TextEntry | None:
         if entry_id < 0:
@@ -223,48 +345,119 @@ class OverlayWindow(QWidget):
                 item.widget().hide()
                 item.widget().deleteLater()
 
-        widgets = [self._create_entry(entry) for entry in self._entries]
-        for widget in widgets:
+        self._entry_widgets = [self._create_entry(entry) for entry in self._entries]
+        for widget in self._entry_widgets:
             self.text_layout.addWidget(widget)
-            # addWidget() only shows the widget on the next event loop pass, and the
-            # layout skips hidden widgets, so show it now for the height calculation
-            widget.show()
+            self._track_mouse(widget)
 
-        self._fit_to_content(widgets)
+        self._fit_to_content()
 
-    def _fit_to_content(self, widgets: list[QWidget]):
-        """Size the window to its wrapped text.
+    def _fit_to_content(self):
+        """Fit the subtitles to the window.
 
-        adjustSize() sizes word-wrapped labels for a guessed width, so long lines
-        were cut off. Ask the layout for the height it needs at the actual width
-        instead. If that does not fit on screen, hide the oldest entries so the
-        newest one is always complete. In the lower half of the screen the bottom
-        edge stays put and the window grows upward.
+        Word-wrapped labels need the layout's height-for-width at the actual
+        width (adjustSize() guesses a width and cut lines off). With a fixed
+        height, the oldest entries are hidden until the rest fit. With automatic
+        height, the window takes the height it needs up to the screen height;
+        in the lower half of the screen its bottom edge stays put.
         """
         screen = (self.screen() or QApplication.primaryScreen()).availableGeometry()
-        max_height = screen.height() - 2 * 30
+        limit = self._fixed_height or screen.height() - 2 * 30
         layout = self.layout()
 
-        visible = list(widgets)
+        # addWidget() only shows a widget on the next event loop pass, and the layout
+        # skips hidden widgets, so show every entry before measuring
+        for widget in self._entry_widgets:
+            widget.show()
+            for label in widget.findChildren(QLabel):  # undo an earlier _elide_start()
+                full = label.property("full_text")
+                if full and label.text() != full:
+                    label.setText(full)
+        visible = list(self._entry_widgets)
         while True:
-            # Hiding a widget only invalidates the inner layout; the outer layout keeps
-            # a cached height for the container until the container reports a change
-            self.text_layout.invalidate()
-            self.container.updateGeometry()
-            layout.invalidate()
-            layout.activate()
-            height = layout.totalHeightForWidth(self.width())
-            if height <= max_height or len(visible) <= 1:
+            height = self._needed_height()
+            if height <= limit or len(visible) <= 1:
                 break
             visible.pop(0).hide()  # hidden widgets take no space in the layout
-        height = min(height, max_height)
+        if height > limit and visible:
+            # The newest entry alone is taller than the window: drop the start of its
+            # text, since the latest words are the ones being read
+            height = self._elide_start(visible[-1], limit)
+        self._fitted_width = self.width()
 
+        log.debug("fit: fixed=%s limit=%s needed=%s size=%dx%d visible=%d/%d",
+                  self._fixed_height, limit, height, self.width(), self.height(),
+                  len(visible), len(self._entry_widgets))
+        if self._fixed_height:
+            if self.height() != self._fixed_height:
+                self.resize(self.width(), self._fixed_height)
+            return
+
+        height = max(MIN_HEIGHT, min(height, limit))
         geo = self.geometry()
         grow_upward = geo.center().y() > screen.center().y()
         bottom = geo.bottom()
-        self.setFixedHeight(height)
+        self.resize(self.width(), height)
         if grow_upward:
             self.move(geo.x(), bottom - height + 1)
+        log.debug("fit auto: resized to %dx%d at y=%d", self.width(), height, self.y())
+
+    def hasHeightForWidth(self) -> bool:
+        # Otherwise Qt on Windows re-sizes the top-level window to the layout's
+        # height-for-width after each resize, overriding the user's fixed height.
+        # _fit_to_content() asks the layout directly instead.
+        return False
+
+    def _needed_height(self) -> int:
+        # Layouts cache heights at every level: the entry layouts (label text changed),
+        # the text layout (entries hidden) and the outer layout (container height)
+        for widget in self._entry_widgets:
+            widget.layout().invalidate()
+            widget.updateGeometry()
+        self.text_layout.invalidate()
+        self.container.updateGeometry()
+        self.layout().invalidate()
+        self.layout().activate()
+        return self.layout().totalHeightForWidth(self.width())
+
+    def _elide_start(self, widget: QWidget, limit: int) -> int:
+        """Shorten the entry's labels from the front ("…" + the end) until it fits."""
+        labels = [label for label in widget.findChildren(QLabel) if label.text()]
+        height = self._needed_height()
+        while height > limit:
+            changed = False
+            for label in labels:
+                text = label.text().lstrip("…")
+                words = text.split(" ")
+                if len(words) > 3:
+                    text = " ".join(words[1:])  # English: drop a word
+                elif len(text) > 4 and " " not in text:
+                    text = text[2:]  # Chinese: drop two characters
+                else:
+                    continue
+                label.setText("…" + text)
+                changed = True
+            if not changed:
+                break
+            height = self._needed_height()
+        return height
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        log.debug("resizeEvent %dx%d -> %dx%d resizing=%s fixed=%s", event.oldSize().width(),
+                  event.oldSize().height(), event.size().width(), event.size().height(),
+                  self._user_resizing, self._fixed_height)
+        if self._user_resizing:
+            # The system resize loop sends these while the user drags an edge
+            self._fixed_height = self.height()
+            self._save_timer.start()
+        if self._user_resizing or self.width() != self._fitted_width:
+            self._fit_to_content()
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if self._user_resizing:
+            self._save_timer.start()
 
     def _create_entry(self, entry: TextEntry) -> QWidget:
         widget = QWidget()
@@ -276,6 +469,7 @@ class OverlayWindow(QWidget):
 
         # Original
         orig_label = QLabel(entry.original)
+        orig_label.setProperty("full_text", entry.original)
         orig_label.setFont(font)
         orig_label.setStyleSheet("color: #9a9a9a;" if entry.partial else "color: #ffffff;")
         orig_label.setWordWrap(True)
@@ -284,6 +478,7 @@ class OverlayWindow(QWidget):
         # Translation
         if entry.translated:
             trans_label = QLabel(entry.translated)
+            trans_label.setProperty("full_text", entry.translated)
             trans_label.setFont(QFont("Microsoft JhengHei UI", self.font_size))
             dim = entry.partial or entry.translation_pending
             trans_label.setStyleSheet("color: #6f8fb3;" if dim else "color: #7cb7ff;")
@@ -297,14 +492,65 @@ class OverlayWindow(QWidget):
         self._rebuild_display()
         self.placeholder.show()
 
-    # Drag to move
+    # Mouse: drag inside to move, drag the edges to resize, double-click for auto height
+
+    def _edges_at(self, pos: QPoint) -> Qt.Edge:
+        """Window edges whose resize band (just inside the box) contains pos."""
+        box = self.container.geometry()
+        edges = Qt.Edge(0)
+        if box.left() <= pos.x() < box.left() + RESIZE_MARGIN:
+            edges |= Qt.Edge.LeftEdge
+        elif box.right() - RESIZE_MARGIN < pos.x() <= box.right():
+            edges |= Qt.Edge.RightEdge
+        if box.top() <= pos.y() < box.top() + RESIZE_MARGIN:
+            edges |= Qt.Edge.TopEdge
+        elif box.bottom() - RESIZE_MARGIN < pos.y() <= box.bottom():
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    @staticmethod
+    def _cursor_for(edges: Qt.Edge) -> Qt.CursorShape:
+        horizontal = bool(edges & (Qt.Edge.LeftEdge | Qt.Edge.RightEdge))
+        vertical = bool(edges & (Qt.Edge.TopEdge | Qt.Edge.BottomEdge))
+        if horizontal and vertical:
+            main_diagonal = edges in (Qt.Edge.LeftEdge | Qt.Edge.TopEdge, Qt.Edge.RightEdge | Qt.Edge.BottomEdge)
+            return Qt.CursorShape.SizeFDiagCursor if main_diagonal else Qt.CursorShape.SizeBDiagCursor
+        if horizontal:
+            return Qt.CursorShape.SizeHorCursor
+        if vertical:
+            return Qt.CursorShape.SizeVerCursor
+        return Qt.CursorShape.ArrowCursor
+
     def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        edges = self._edges_at(event.position().toPoint())
+        started = bool(edges) and self.windowHandle() is not None and self.windowHandle().startSystemResize(edges)
+        log.debug("press at %s edges=%s startSystemResize=%s", event.position().toPoint(), edges, started)
+        if started:
+            self._user_resizing = True
+            return
+        self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
     def mouseMoveEvent(self, event: QMouseEvent):
         if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos:
             self.move(event.globalPosition().toPoint() - self._drag_pos)
+            return
+        if event.buttons() == Qt.MouseButton.NoButton:
+            shape = self._cursor_for(self._edges_at(event.position().toPoint()))
+            if self.cursor().shape() != shape:
+                self.setCursor(QCursor(shape))
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        self._drag_pos = None
+        if self._drag_pos is not None:
+            self._drag_pos = None
+            self._save_settings()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        log.debug("double click at %s", event.position().toPoint())
+        if event.button() == Qt.MouseButton.LeftButton and self._fixed_height:
+            self.set_auto_height()
+
+    def leaveEvent(self, event):
+        self.unsetCursor()
+        super().leaveEvent(event)

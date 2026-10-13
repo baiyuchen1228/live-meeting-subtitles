@@ -46,7 +46,7 @@ def main():
     os.makedirs(args.out, exist_ok=True)
 
     app = QApplication(sys.argv)
-    win = OverlayWindow()
+    win = OverlayWindow(remember=False)
     win.show()
     app.processEvents()
 
@@ -102,6 +102,76 @@ def main():
         failures += 1
         print("window has large empty space")
     win.grab().save(os.path.join(args.out, "overflow.png"))
+
+    # User-chosen size: height stays fixed, newest entry sits at the bottom
+    win.set_user_size(480, 320)
+    for n in range(4, 40, 6):
+        win.set_partial(20, " ".join(EN.split()[:n]), ZH[: n * 2])
+        check(f"fixed-size preview {n} words")
+    win.add_text(EN, ZH, 20)
+    check("fixed-size final")
+    entries = [win.text_layout.itemAt(i).widget() for i in range(1, win.text_layout.count())]
+    newest = entries[-1]
+    gap = win.container.height() - newest.geometry().bottom() - 12  # 12 = container bottom margin
+    print(f"fixed size: window {win.width()}x{win.height()}, gap under newest entry {gap}px")
+    if (win.width(), win.height()) != (480, 320) or not newest.isVisible() or gap > 20:
+        failures += 1
+        print("fixed size not kept or newest entry not at the bottom")
+    win.grab().save(os.path.join(args.out, "fixed_size.png"))
+
+    # A box too small for even one sentence: keep the end of the text visible
+    win.set_user_size(360, 160)
+    check("tiny fixed size")
+    labels = [l for l in entries[-1].findChildren(QLabel) if l.isVisible()]
+    ends_ok = all(l.text() == l.property("full_text")
+                  or (l.text().startswith("…") and l.property("full_text").endswith(l.text()[1:]))
+                  for l in labels)
+    print(f"tiny box: {[l.text()[:25] + '...' + l.text()[-12:] for l in labels]}")
+    if not ends_ok:
+        failures += 1
+        print("tiny box does not show the end of the sentence")
+    win.grab().save(os.path.join(args.out, "tiny.png"))
+    win.set_user_size(480, 320)
+    check("widened again")
+
+    # Double-click behaviour: back to a height that follows the content
+    win.set_auto_height()
+    check("auto height again")
+    shown = [w for w in entries if w.isVisible()]
+    print(f"auto height: window {win.width()}x{win.height()}, {len(shown)} entries shown")
+
+    # Resize bands: corners and edges just inside the box
+    box = win.container.geometry()
+    from PyQt6.QtCore import QPoint, Qt
+    expect = {
+        "top-left": (QPoint(box.left() + 2, box.top() + 2), Qt.Edge.LeftEdge | Qt.Edge.TopEdge),
+        "bottom-right": (QPoint(box.right() - 2, box.bottom() - 2), Qt.Edge.RightEdge | Qt.Edge.BottomEdge),
+        "right": (QPoint(box.right() - 2, box.center().y()), Qt.Edge.RightEdge),
+        "middle": (box.center(), Qt.Edge(0)),
+    }
+    for name, (pos, edges) in expect.items():
+        if win._edges_at(pos) != edges:
+            failures += 1
+            print(f"resize band {name}: got {win._edges_at(pos)}, expected {edges}")
+
+    # Size, position and fixed height survive a restart
+    first = OverlayWindow(settings_name="overlay-check")
+    first.show()
+    app.processEvents()
+    first.set_user_size(520, 300)
+    first.move(150, 120)
+    app.processEvents()
+    first.close()
+    second = OverlayWindow(settings_name="overlay-check")
+    second.show()
+    app.processEvents()
+    restored = (second.x(), second.y(), second.width(), second.height(), second._fixed_height)
+    print(f"restored after restart: x={restored[0]} y={restored[1]} {restored[2]}x{restored[3]} fixed={restored[4]}")
+    if restored != (150, 120, 520, 300, 300):
+        failures += 1
+        print("size/position not restored")
+    second._settings.clear()
+    second.close()
 
     print(f"{steps} updates, {failures} with clipped text or off-screen window")
     print(f"window {win.width()}x{win.height()} at y={win.y()}, screen height {win.screen().availableGeometry().height()}")
