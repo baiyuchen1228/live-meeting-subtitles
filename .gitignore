@@ -57,3 +57,8 @@ config.local.yaml
 # Downloaded evaluation material and results
 eval/data/
 eval/results/
+
+# Personal Claude Code notes, kept local only
+CLAUDE.md
+CLAUDE.local.md
+.claude/
