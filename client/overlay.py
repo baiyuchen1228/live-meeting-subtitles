@@ -77,8 +77,11 @@ class OverlayWindow(QWidget):
 
         # Container with background
         self.container = QWidget()
+        # Only the container gets the background (a bare "QWidget" selector would
+        # also give every subtitle entry its own box)
+        self.container.setObjectName("container")
         self.container.setStyleSheet(f"""
-            QWidget {{
+            QWidget#container {{
                 background-color: rgba(20, 20, 30, {int(opacity * 255)});
                 border-radius: 12px;
             }}
@@ -129,18 +132,19 @@ class OverlayWindow(QWidget):
         layout.addWidget(self.container)
 
     def _position_window(self, position: str):
-        screen = QApplication.primaryScreen().geometry()
+        screen = QApplication.primaryScreen().availableGeometry()
         margin = 30
+        self.adjustSize()
 
         if "right" in position:
-            x = screen.width() - self.width() - margin
+            x = screen.right() - self.width() - margin
         else:
-            x = margin
+            x = screen.left() + margin
 
         if "bottom" in position:
-            y = screen.height() - 350 - margin
+            y = screen.bottom() - self.height() - margin
         else:
-            y = margin
+            y = screen.top() + margin
 
         self.move(x, y)
 
@@ -212,18 +216,55 @@ class OverlayWindow(QWidget):
         self.status_label.setText(status)
 
     def _rebuild_display(self):
-        # Clear old entries
+        # Clear old entries; hide them right away, deleteLater only runs on the next loop
         while self.text_layout.count() > 1:
             item = self.text_layout.takeAt(1)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
 
-        # Add entries
-        for entry in self._entries:
-            widget = self._create_entry(entry)
+        widgets = [self._create_entry(entry) for entry in self._entries]
+        for widget in widgets:
             self.text_layout.addWidget(widget)
+            # addWidget() only shows the widget on the next event loop pass, and the
+            # layout skips hidden widgets, so show it now for the height calculation
+            widget.show()
 
-        self.adjustSize()
+        self._fit_to_content(widgets)
+
+    def _fit_to_content(self, widgets: list[QWidget]):
+        """Size the window to its wrapped text.
+
+        adjustSize() sizes word-wrapped labels for a guessed width, so long lines
+        were cut off. Ask the layout for the height it needs at the actual width
+        instead. If that does not fit on screen, hide the oldest entries so the
+        newest one is always complete. In the lower half of the screen the bottom
+        edge stays put and the window grows upward.
+        """
+        screen = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        max_height = screen.height() - 2 * 30
+        layout = self.layout()
+
+        visible = list(widgets)
+        while True:
+            # Hiding a widget only invalidates the inner layout; the outer layout keeps
+            # a cached height for the container until the container reports a change
+            self.text_layout.invalidate()
+            self.container.updateGeometry()
+            layout.invalidate()
+            layout.activate()
+            height = layout.totalHeightForWidth(self.width())
+            if height <= max_height or len(visible) <= 1:
+                break
+            visible.pop(0).hide()  # hidden widgets take no space in the layout
+        height = min(height, max_height)
+
+        geo = self.geometry()
+        grow_upward = geo.center().y() > screen.center().y()
+        bottom = geo.bottom()
+        self.setFixedHeight(height)
+        if grow_upward:
+            self.move(geo.x(), bottom - height + 1)
 
     def _create_entry(self, entry: TextEntry) -> QWidget:
         widget = QWidget()
