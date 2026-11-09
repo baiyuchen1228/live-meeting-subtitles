@@ -47,7 +47,7 @@ Captures system audio, transcribes speech using Parakeet or Whisper, and display
 ```bash
 # In WSL
 cd ~/projects
-git clone https://github.com/holydrug/live-meeting-subtitles.git
+git clone https://github.com/baiyuchen1228/live-meeting-subtitles.git
 cd live-meeting-subtitles
 ```
 
@@ -93,7 +93,12 @@ pip install -r client/requirements.txt
 
 ## Usage
 
-Start the server first, then the client.
+Start the server first, then the client. You need **two different terminals**, both in the folder where you ran the installation above (`venv/` and `venv_win/` only exist there):
+
+| Step | Terminal | Commands look like |
+|---|---|---|
+| Server | WSL (bash / zsh) | `source ...`, `./server.sh` |
+| Client | Windows PowerShell | `Set-ExecutionPolicy ...`, `.\client.ps1` |
 
 ### 1. Start the server (WSL terminal)
 
@@ -164,6 +169,12 @@ Defaults are set by command-line options (see above). `config.yaml` documents th
 
 ### "No loopback device found"
 Make sure you have audio playing through the selected device. WASAPI loopback requires active audio output.
+
+### `NeMo toolkit required` (server) or `No module named 'PyQt6'` (client)
+The dependencies are not installed in the folder you are running from. Check the path in the traceback: if it is a different copy of the project (for example an old clone under `C:\Users\...`), `cd` to the one you installed in, or run the installation steps in this folder.
+
+### `command not found: Set-ExecutionPolicy` or `'source' is not recognized`
+The command was typed in the wrong terminal. `Set-ExecutionPolicy` and `.\client.ps1` are PowerShell; `source venv/bin/activate` and `./server.sh` are WSL.
 
 ### CUDA not available in WSL
 1. Update NVIDIA drivers on Windows (535+ recommended)
